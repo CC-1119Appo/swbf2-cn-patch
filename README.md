@@ -14,7 +14,7 @@
 - **官方译名**：对齐星球大战中文网译名库（Kashyyyk → 卡希克、Mygeeto → 麦基托 等）
 - **单文件安装器**：版本检测 + 可选安装 + 一键还原，兼容 Windows XP SP3 及以上
 
-> **v1.1.3 起只提供「封装动画」版本**：字幕直接烧在影片里，GOG 与 Steam 表现一致，不依赖运行时钩子。
+> **v1.2.0 起只提供「封装动画」版本**：字幕直接烧在影片里，GOG 与 Steam 表现一致，不依赖运行时钩子。
 
 ## 下载
 
@@ -22,9 +22,9 @@
 
 | 文件 | 说明 |
 |---|---|
-| SWBF2_汉化安装器_v1.1.3.exe | **推荐**：单文件安装器（含版本检测与一键还原） |
-| SWBF2_汉化_Remaster_封装动画_v1.1.3.zip | 手动包（Remaster） |
-| SWBF2_汉化_原版_封装动画_v1.1.3.zip | 手动包（原版 / Steam） |
+| SWBF2_汉化安装器_v1.2.0.exe | **推荐**：单文件安装器（含版本检测与一键还原） |
+| SWBF2_汉化_Remaster_封装动画_v1.2.0.zip | 手动包（Remaster） |
+| SWBF2_汉化_原版_封装动画_v1.2.0.zip | 手动包（原版 / Steam） |
 
 ## 安装
 
@@ -45,8 +45,8 @@ Remaster 检测：`GameData\addon\Remaster` 目录是否存在。
 ### 静默安装
 
 ```bat
-SWBF2_汉化安装器_v1.1.3.exe --silent --dir="E:\...\GameData" --edition=remaster
-SWBF2_汉化安装器_v1.1.3.exe --detect --dir="E:\...\GameData"        # 只检测，写 detect.txt
+SWBF2_汉化安装器_v1.2.0.exe --silent --dir="E:\...\GameData" --edition=remaster
+SWBF2_汉化安装器_v1.2.0.exe --detect --dir="E:\...\GameData"        # 只检测，写 detect.txt
 ```
 
 ## 还原

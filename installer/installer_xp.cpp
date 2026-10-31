@@ -233,6 +233,33 @@ static int join_and_check(const WCHAR* dir, const WCHAR* rel) {
     return file_exists_w(p);
 }
 
+static void cleanup_subs(const WCHAR* dir);
+
+static unsigned int file_size_w(const WCHAR* p);
+static void join2(const WCHAR* dir, const WCHAR* rel, WCHAR* out);
+// 删除旧版外挂字幕残留（cn_subs\*.srt）
+static void cleanup_subs(const WCHAR* dir) {
+    static WCHAR pat[2048];
+    str_copyW(pat, dir, 2048);
+    str_catW(pat, L"\\cn_subs\\*.srt", 2048);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            static WCHAR full[2048];
+            str_copyW(full, dir, 2048);
+            str_catW(full, L"\\cn_subs\\", 2048);
+            str_catW(full, fd.cFileName, 2048);
+            DeleteFileW(full);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    static WCHAR sd[2048];
+    str_copyW(sd, dir, 2048);
+    str_catW(sd, L"\\cn_subs", 2048);
+    RemoveDirectoryW(sd);   // 空目录才会成功
+}
+
 static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) {
     static WCHAR logp[2048];
     str_copyW(logp, dir, 2048);
@@ -259,9 +286,29 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
     for (unsigned int i = 0; i < g_count && ok; i++) {
         const char* n = g_entries[i].name;
         if (!(has_prefix(n, pre) || has_prefix(n, "S/") || (embed && has_prefix(n, "M/")))) continue;
+        // Remaster 自带的 ingame.lvl：仅当仍是未打补丁的原文件时才替换（装了 Extension 的保持原样）
+        if (isRemaster && lstrcmpA(n, "R/data/_lvl_pc/ingame.lvl") == 0) {
+            static WCHAR probe[2048];
+            str_copyW(probe, dir, 2048);
+            str_catW(probe, L"\\data\\_lvl_pc\\ingame.lvl", 2048);
+            unsigned int sz = file_size_w(probe);
+            if (sz != 14555244u) { log_line("skip ingame (extension)"); continue; }
+        }
         if (!extract_entry(i, dir, silent)) { log_line("FAILED entry"); ok = 0; break; }
         copied++;
         if (has_prefix(n, "M/")) log_line("copied movie");
+    }
+    cleanup_subs(dir);
+    if (ok) {
+        static WCHAR mk[2048];
+        join2(dir, L"cn_patch.txt", mk);
+        HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        if (mh != INVALID_HANDLE_VALUE) {
+            const char* txt = isRemaster ? "v1.2.0 remaster" : "v1.2.0 vanilla";
+            DWORD w = 0;
+            WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
+            CloseHandle(mh);
+        }
     }
     char num[24]; u32_to_str((unsigned int)copied, num);
     log_line(ok ? "done, files copied:" : "FAILED, files copied:");
@@ -431,7 +478,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 274, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 306, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.1.3  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 330, 600, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.2.0  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 330, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
@@ -481,9 +528,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (g_platform == 1) plat = L"GOG 版（2018 修订）";
                 else if (g_platform == 2) plat = L"GOG 版（经典版 / 2017 前）";
                 else if (g_platform == 3) plat = L"Steam 版";
-                wsprintfW(out, L"平台：%s\r\n主程序：%u 字节\r\nRemaster 1.5r2：%s\r\n建议安装：%s",
+                static WCHAR mk[2048];
+                join2(dir, L"cn_patch.txt", mk);
+                WCHAR cnState[96];
+                if (file_exists_w(mk)) {
+                    HANDLE mh = CreateFileW(mk, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+                    static char buf[64];
+                    buf[0] = 0;
+                    DWORD rd = 0;
+                    if (mh != INVALID_HANDLE_VALUE) { ReadFile(mh, buf, 60, &rd, NULL); CloseHandle(mh); }
+                    WCHAR ver[64];
+                    MultiByteToWideChar(CP_UTF8, 0, buf, -1, ver, 64);
+                    wsprintfW(cnState, L"已安装（%s）", ver);
+                } else {
+                    static WCHAR ck[2048];
+                    join2(dir, L"cn_hook.dll", ck);
+                    if (file_exists_w(ck)) wsprintfW(cnState, L"已安装（无版本标记）");
+                    else wsprintfW(cnState, L"未安装");
+                }
+                wsprintfW(out, L"平台：%s\r\n主程序：%u 字节\r\nRemaster 1.5r2：%s\r\n汉化补丁：%s\r\n建议安装：%s",
                           plat, exe,
                           g_remaster ? L"已安装" : L"未安装",
+                          cnState,
                           g_remaster ? L"Remaster 版" : L"原版 1.1 版");
             }
             SetWindowTextW(GetDlgItem(hwnd, ID_RESULT), out);
@@ -502,6 +568,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             static WCHAR extra[2048];
             join2(dir, L"cn_hook.dll", extra); DeleteFileW(extra);
             join2(dir, L"SWBF2_CN.exe", extra); DeleteFileW(extra);
+            join2(dir, L"cn_patch.txt", extra); DeleteFileW(extra);
             static WCHAR msg[512];
             wsprintfW(msg, L"已还原 %d 个原版文件（core/ingame/shell 及字体）。\r\n\r\n启动器与 SRT 已移除；影片请用 Steam/GOG 的「验证文件」恢复。", n);
             MessageBoxW(hwnd, msg, L"还原原版完成", MB_ICONINFORMATION);
@@ -554,6 +621,10 @@ void __stdcall EntryPoint() {
         if ((silent & 0x400) && sdir) {
             detect_version(sdir);
             int n = run_restore_original(sdir, g_family);
+            static WCHAR rm[2048];
+            join2(sdir, L"cn_hook.dll", rm);   DeleteFileW(rm);
+            join2(sdir, L"SWBF2_CN.exe", rm);  DeleteFileW(rm);
+            join2(sdir, L"cn_patch.txt", rm);  DeleteFileW(rm);
             ExitProcess(n >= 0 ? 0 : 3);
         }
         if ((silent & 0x200) && sdir) {
@@ -569,6 +640,14 @@ void __stdcall EntryPoint() {
                 k += u32_to_str((unsigned int)g_family, b + k);
                 b[k++] = ' '; b[k++] = 'r'; b[k++] = 'e'; b[k++] = 'm'; b[k++] = '=';
                 k += u32_to_str((unsigned int)g_remaster, b + k);
+                b[k++] = ' '; b[k++] = 'c'; b[k++] = 'n'; b[k++] = '=';
+                {
+                    static WCHAR ck[2048];
+                    join2(sdir, L"cn_patch.txt", ck);
+                    int has = file_exists_w(ck) ? 1 : 0;
+                    if (!has) { join2(sdir, L"cn_hook.dll", ck); has = file_exists_w(ck) ? 2 : 0; }
+                    k += u32_to_str((unsigned int)has, b + k);
+                }
                 b[k] = 0;
                 DWORD w = 0; WriteFile(h, b, (DWORD)k, &w, NULL); CloseHandle(h);
             }
@@ -608,7 +687,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.1.3",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.2.0",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 650, 395, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

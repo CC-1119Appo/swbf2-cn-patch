@@ -5,8 +5,65 @@
 #include <stdarg.h>
 #include <string.h>
 
+static void plog(const char* fmt, ...);
+
 typedef unsigned int (__thiscall *fn_lookup_t)(void* self, unsigned int code);
 
+// 通过 Lua 注册表（name 字符串指针 -> 函数指针）定位函数，兼容不同构建
+static unsigned int find_lua_func(const char* name) {
+    unsigned char* base = (unsigned char*)GetModuleHandleA(NULL);
+    if (!base) return 0;
+    unsigned int size = 0;
+    __try {
+        IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+        IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+        size = nt->OptionalHeader.SizeOfImage;
+    } __except (1) { return 0; }
+    plog("scan: image size %#x base %p", size, (void*)base);
+    if (!size || size > 0x1000000) return 0;
+    size_t len = lstrlenA(name);
+    unsigned int strVa = 0;
+    __try {
+        for (unsigned int i = 0; i + len + 1 < size; i++) {
+            if (memcmp(base + i, name, len) == 0 && base[i + len] == 0) { strVa = (unsigned int)(base + i); break; }
+        }
+    } __except (1) { return 0; }
+    plog("scan: %s string at %p", name, (void*)strVa);
+    if (!strVa) return 0;
+    __try {
+        for (unsigned int i = 0; i + 8 < size; i += 4) {
+            if (*(unsigned int*)(base + i) == strVa) {
+                unsigned int fn = *(unsigned int*)(base + i + 4);
+                if (fn >= (unsigned int)base && fn < (unsigned int)base + size) { plog("scan: %s func=%p", name, (void*)fn); return fn; }
+            }
+        }
+    } __except (1) { return 0; }
+    return 0;
+}
+
+// 直接读 Lua 栈上的字符串参数（Lua 5.1：base@+12，TValue 步长16，tt@+8，字符串数据@TString+16）
+static const char* lua_str(void* L, int idx) {
+    __try {
+        unsigned char* b = *(unsigned char**)((char*)L + 12);
+        if (!b) return 0;
+        unsigned char* tv = b + (idx - 1) * 16;
+        int tt = *(int*)(tv + 8);
+        if (tt != 4) return 0;               // LUA_TSTRING
+        void* ts = *(void**)tv;
+        if (!ts) return 0;
+        const char* s = (const char*)((char*)ts + 16);
+        if (!s[0]) return 0;
+        if ((unsigned char)s[0] < 0x20 || (unsigned char)s[0] > 0x7E) return 0;
+        return s;
+    } __except (1) { return 0; }
+}
+
+static void plog(const char* fmt, ...);
+static void* A(unsigned int va) {
+    static unsigned int b = 0;
+    if (!b) b = (unsigned int)GetModuleHandleA(NULL);
+    return (void*)(b + (va - 0x400000));
+}
 static FILE* g_log = NULL;
 static unsigned int g_tramp = 0;         // 原始函数前 8 字节 + jmp 回去
 static unsigned int g_lookupAddr = 0;
@@ -14,6 +71,7 @@ static volatile int g_mode = 0;          // 0=none 1=载入页 2=单位数量
 static unsigned char g_tmp[24];
 static unsigned char g_zero[24];
 static int g_shift = 0;
+static int g_vanillaLoadShift = 0;    // 原版载入页：与英文原版保持一致（实测原版本身就是贴着装饰带）
 static int g_unitShift = 41;
 static int g_hits = 0, g_mods = 0;
 extern "C" void overlay_start();
@@ -37,11 +95,14 @@ static void plog(const char* fmt, ...) {
 }
 
 static int g_dbgCjk = 0;
+static int g_dbgLoad = 0;
 static unsigned int c_lookup(void* self, unsigned int code) {
     unsigned int ch = code & 0xFFFF;
 
     if (ch == 0x0301) { g_mode = 1; g_hits++; return (unsigned int)g_zero; }
     if (ch == 0x0302) { g_mode = 0; return (unsigned int)g_zero; }
+    if (ch == 0x0303) { g_mode = 3; g_hits++; return (unsigned int)g_zero; }
+    if (ch == 0x0304) { g_mode = 0; return (unsigned int)g_zero; }
     if (ch == 0x0305) { g_mode = 2; g_hits++; return (unsigned int)g_zero; }
     if (ch == 0x0306) { g_mode = 0; return (unsigned int)g_zero; }
 
@@ -54,7 +115,8 @@ static unsigned int c_lookup(void* self, unsigned int code) {
     if (g_mode == 1) note_mode_fh(fh);
     int scaleW = 100;
     int scaleH = 100, shift = 0;
-    if (g_mode == 2) { scaleH = 100; shift = -g_unitShift; }
+    if (g_mode == 3) { scaleH = 100; scaleW = 100; shift = g_vanillaLoadShift; }
+    else if (g_mode == 2) { scaleH = 100; shift = -g_unitShift; }
     else if (fh == 22 || fh == 23 || fh == 27 || fh == 33) { scaleH = 100; scaleW = 100; shift = g_shift; }
     else { scaleH = 100; scaleW = 100; shift = g_shift - 10; }
 
@@ -94,43 +156,48 @@ __declspec(naked) static void lookup_thunk(void) {
     }
 }
 
-// ---- 影片请求钩子 ----
+// ---- 影片请求钩子（按名字扫描定位，兼容不同构建） ----
 static unsigned int g_movieTramp = 0;
-static void movie_thunk(void);
-typedef const char* (__cdecl *tLuaStr)(void* L, int idx, int def);
-static void install_movie_hook() {
-    unsigned int addr = 0x426A60;
+
+static unsigned int patch_func(unsigned int addr, void* thunk, const char* tag) {
+    if (!addr) { plog("%s: not found", tag); return 0; }
     unsigned char* p = (unsigned char*)addr;
-    // 特征校验：51 (push ecx) + E8 rel32 (call ...)，且 call 目标应为 0x630C60
-    __try {
-        if (p[0] != 0x51 || p[1] != 0xE8) { plog("movie hook: prologue mismatch, skipped"); return; }
-        int rel = *(int*)(p + 2);
-        unsigned int target = (addr + 6) + rel;
-        if (target != 0x630C60) { plog("movie hook: call target %p != 0x630C60, skipped", (void*)target); return; }
-    } __except (1) { plog("movie hook: read failed, skipped"); return; }
+    unsigned char first[8] = {0};
+    __try { memcpy(first, p, 8); } __except (1) { plog("%s: read failed", tag); return 0; }
+    plog("%s: prologue %02X %02X %02X %02X %02X %02X %02X %02X", tag,
+         first[0], first[1], first[2], first[3], first[4], first[5], first[6], first[7]);
+
+    int use6 = (first[0] == 0x51 && first[1] == 0xE8);
+    int copyLen = use6 ? 6 : 5;
     unsigned char* t = (unsigned char*)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!t) return;
-    // 原函数前 6 字节: 51 (push ecx) + e8 rel32 (call 0x630c60)
-    // 跳板里重建，避免相对寻址错位
-    t[0] = 0x51;
-    t[1] = 0xE8;
-    *(int*)(t + 2) = (int)(0x630C60 - ((unsigned int)t + 1 + 5));
-    t[6] = 0xE9;
-    *(int*)(t + 7) = (int)((addr + 6) - ((unsigned int)t + 6 + 5));
+    if (!t) return 0;
+    if (use6) {
+        int rel = *(int*)(first + 2);
+        unsigned int target = (addr + 6) + rel;
+        t[0] = 0x51;
+        t[1] = 0xE8;
+        *(int*)(t + 2) = (int)(target - ((unsigned int)t + 1 + 5));
+    } else {
+        memcpy(t, first, 5);
+    }
+    t[copyLen] = 0xE9;
+    *(int*)(t + copyLen + 1) = (int)((addr + copyLen) - ((unsigned int)t + copyLen + 5));
+
     DWORD old;
-    if (!VirtualProtect(p, 8, PAGE_EXECUTE_READWRITE, &old)) return;
+    if (!VirtualProtect(p, copyLen, PAGE_EXECUTE_READWRITE, &old)) { plog("%s: VirtualProtect failed", tag); return 0; }
     p[0] = 0xE9;
-    *(int*)(p + 1) = (int)((unsigned int)movie_thunk - (addr + 5));
-    VirtualProtect(p, 8, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), p, 8);
-    g_movieTramp = (unsigned int)t;
-    plog("movie hook installed at %p tramp %p", (void*)addr, (void*)t);
+    *(int*)(p + 1) = (int)((unsigned int)thunk - (addr + 5));
+    VirtualProtect(p, copyLen, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, copyLen);
+    plog("%s: hooked at %p (len %d) tramp %p", tag, (void*)addr, copyLen, (void*)t);
+    return (unsigned int)t;
 }
+
 static void log_movie_arg() {
     __try {
-        void* L = *(void**)0x1d77f68;
+        void* L = *(void**)A(0x1d77f68);
         if (!L) { plog("movie request: (no lua state)"); return; }
-        const char* name = ((tLuaStr)0x70dd00)(L, 2, 0);
+        const char* name = lua_str(L, 2);
         plog("movie request: %s", name ? name : "(null)");
         if (name) subs_on_movie(name);
     } __except (1) { plog("movie arg read failed"); }
@@ -144,6 +211,9 @@ __declspec(naked) static void movie_thunk(void) {
         jmp  eax
     }
 }
+static void install_movie_hook() {
+    g_movieTramp = patch_func(find_lua_func("ScriptCB_PlayInGameMovie"), (void*)movie_thunk, "movie hook");
+}
 
 // ---- iftext diag: IFText_SetString / SetTextBox 探针 ----
 static unsigned int g_setstrTramp = 0;
@@ -156,12 +226,12 @@ static void* lua_base_of(void* L) { return *(void**)((char*)L + 12); }
 
 static void diag_setstring() {
     __try {
-        void* L = *(void**)0x1d77f68;
+        void* L = *(void**)A(0x1d77f68);
         if (!L || g_logCount > 400) return;
         int top = ((int (__cdecl*)(void*))0x70e000)(L);
         if (top < 1) return;
         void* el = ((void* (__cdecl*)(void*, int))0x70e630)(L, 1);
-        const char* s = (const char*)((const char* (__cdecl*)(void*, int, int))0x70dd00)(L, 2, 0);
+        const char* s = (const char*)((const char* (__cdecl*)(void*, int, int))(unsigned int)A(0x70dd00))(L, 2, 0);
         if (!s) return;
         static unsigned int seen[256]; static int nSeen = 0;
         unsigned int key = 2166136261u;
@@ -177,7 +247,7 @@ static void diag_setstring() {
 
 static void diag_settextbox() {
     __try {
-        void* L = *(void**)0x1d77f68;
+        void* L = *(void**)A(0x1d77f68);
         if (!L || g_logCount > 400) return;
         void* base = lua_base_of(L);
         if (!base) return;
@@ -239,41 +309,19 @@ static void install_iftext_diag() {
     plog("iftext: setbox hooked tramp=%p", (void*)g_setboxTramp);
 }
 
-// ---- ScriptCB_PlayMovie (0x426740) 探针 ----
+// ---- ScriptCB_PlayMovie（按名字扫描定位） ----
 static unsigned int g_playmovieTramp = 0;
-static void playmovie_thunk(void);
 static void log_playmovie_arg() {
     __try {
-        void* L = *(void**)0x1d77f68;
+        void* L = *(void**)A(0x1d77f68);
         if (!L) { plog("playmovie: (no lua state)"); return; }
-        const char* name = ((const char* (__cdecl*)(void*, int, int))0x70dd00)(L, 1, 0);
+        const char* name = lua_str(L, 1);
         if (name && name[0]) {
             plog("playmovie request: %s", name);
             subs_on_movie(name);
         }
     } __except (1) { plog("playmovie arg read failed"); }
 }
-static void install_playmovie_hook() {
-    unsigned int addr = 0x426740;
-    unsigned char* p = (unsigned char*)addr;
-    __try {
-        if (p[0] != 0xA1) { plog("playmovie hook: prologue mismatch, skipped"); return; }
-    } __except (1) { plog("playmovie hook: read failed"); return; }
-    unsigned char* t = (unsigned char*)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!t) return;
-    memcpy(t, p, 5);
-    t[5] = 0xE9;
-    *(int*)(t + 6) = (int)((addr + 5) - ((unsigned int)t + 5 + 5));
-    DWORD old;
-    if (!VirtualProtect(p, 8, PAGE_EXECUTE_READWRITE, &old)) return;
-    p[0] = 0xE9;
-    *(int*)(p + 1) = (int)((unsigned int)playmovie_thunk - (addr + 5));
-    VirtualProtect(p, 8, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), p, 8);
-    g_playmovieTramp = (unsigned int)t;
-    plog("playmovie hook installed tramp %p", (void*)t);
-}
-
 __declspec(naked) static void playmovie_thunk(void) {
     __asm {
         pushad
@@ -283,7 +331,9 @@ __declspec(naked) static void playmovie_thunk(void) {
         jmp  eax
     }
 }
-
+static void install_playmovie_hook() {
+    g_playmovieTramp = patch_func(find_lua_func("ScriptCB_PlayMovie"), (void*)playmovie_thunk, "playmovie hook");
+}
 
 static const unsigned char SIG_LOOKUP[8] = { 0x51, 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x10, 0x56 };
 
@@ -315,13 +365,15 @@ static DWORD WINAPI init_thread(LPVOID) {
     strcat(path, "cn_hook.log");
     g_log = fopen(path, "w");
     plog("hook dll loaded (inline)");
-    overlay_start();
-    plog("subtitle overlay started");
+    // 叠加字幕已取消（改用封装动画）
+    plog("overlay disabled (embedded subtitles build)");
+
+    // 影片钩子已取消（字幕烧录进影片）
 
     HMODULE base = GetModuleHandleA(NULL);
     unsigned int lo = (unsigned int)base, hi = lo + 0x800000;
 
-    for (int pass = 0; pass < 40 && g_lookupAddr == 0; pass++) {
+    for (int pass = 0; pass < 12 && g_lookupAddr == 0; pass++) {
         MEMORY_BASIC_INFORMATION mbi;
         unsigned char* p = (unsigned char*)0x00010000;
         while ((unsigned int)p < 0x7FFF0000) {
@@ -351,9 +403,6 @@ static DWORD WINAPI init_thread(LPVOID) {
         }
         if (!g_lookupAddr) Sleep(250);
     }
-    install_movie_hook();
-    install_playmovie_hook();
-    // install_iftext_diag();  // 诊断用，暂关闭（会导致启动崩溃）
     if (!g_lookupAddr) { plog("lookup NOT found"); return 0; }
     plog("lookup found at %p", (void*)g_lookupAddr);
     install_inline(g_lookupAddr);

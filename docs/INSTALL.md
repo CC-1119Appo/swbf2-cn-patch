@@ -2,16 +2,14 @@
 
 ## 方式一：安装器（推荐）
 
-1. 从 [Releases](../../releases) 下载 `SWBF2_汉化安装器_v1.1.exe`
+1. 从 [Releases](../../releases) 下载 `SWBF2_汉化安装器_v1.1.3.3.exe`
 2. 双击运行（未签名，SmartScreen 提示时选「更多信息 → 仍要运行」）
 3. 选择游戏目录：`...\Star Wars - Battlefront 2\GameData`
    - 安装器会自动探测 GOG / Steam 常见路径
 4. 选择游戏版本：
    - **自动检测（推荐）**：检测到 `GameData\addon\Remaster` 即按 Remaster 处理
    - 也可手动指定 `Remaster 1.5r2` 或 `原版 1.1`
-5. 选择过场字幕形式：
-   - **外挂字幕**：不写入影片，占用小
-   - **封装动画**：字幕烧录进影片，任何显示模式可见（需约 1 GB 磁盘）
+5. 字幕已烧录进影片（过场 35 段 + 开场 2 部），无需额外设置
 6. 点击「开始安装」，完成后用 `SWBF2_CN.exe` 启动
 
 安装日志：`GameData\install_cn.log`
@@ -34,4 +32,4 @@
 |---|---|
 | 系统 | Windows XP SP3 及以上（安装器为 32 位，子系统 5.01） |
 | 游戏 | GOG / Steam 版 1.1；Remaster 版需先装 Remaster 1.5r2 |
-| 空间 | 外挂约 130 MB；封装约 1 GB |
+| 空间 | 约 1 GB（含影片） |

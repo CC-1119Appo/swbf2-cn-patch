@@ -250,7 +250,7 @@ static void do_install_gui(HWND hwnd) {
     }
     int auto_mode = (SendMessageW(GetDlgItem(hwnd, ID_R_AUTO), BM_GETCHECK, 0, 0) == BST_CHECKED);
     int rm_mode = (SendMessageW(GetDlgItem(hwnd, ID_R_RM), BM_GETCHECK, 0, 0) == BST_CHECKED);
-    int embed = (SendMessageW(GetDlgItem(hwnd, ID_S_EMB), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    int embed = 1;   // 只提供封装动画版本
     int isRemaster = auto_mode ? join_and_check(dir, L"addon\\Remaster") : rm_mode;
 
     SetWindowTextW(g_hStatus, L"正在安装，请稍候…");
@@ -278,19 +278,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CreateWindowW(L"BUTTON", L"自动检测（推荐）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP, 18, 98, 200, 22, hwnd, (HMENU)ID_R_AUTO, h, NULL);
         CreateWindowW(L"BUTTON", L"Remaster 1.5r2 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 18, 120, 200, 22, hwnd, (HMENU)ID_R_RM, h, NULL);
         CreateWindowW(L"BUTTON", L"原版 1.1 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 18, 142, 200, 22, hwnd, (HMENU)ID_R_VA, h, NULL);
-        CreateWindowW(L"STATIC", L"过场字幕形式：", WS_CHILD | WS_VISIBLE, 250, 78, 220, 20, hwnd, NULL, h, NULL);
-        CreateWindowW(L"BUTTON", L"外挂字幕（推荐，体积小）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP, 250, 98, 300, 22, hwnd, (HMENU)ID_S_OVER, h, NULL);
-        CreateWindowW(L"BUTTON", L"封装动画（字幕烧录进影片）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 250, 120, 300, 22, hwnd, (HMENU)ID_S_EMB, h, NULL);
+        CreateWindowW(L"STATIC", L"过场与开场动画字幕：已烧录进影片（无需额外设置）", WS_CHILD | WS_VISIBLE, 250, 98, 330, 44, hwnd, NULL, h, NULL);
         g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 180, 120, 32, hwnd, (HMENU)ID_INSTALL, h, NULL);
         g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击安装", WS_CHILD | WS_VISIBLE, 150, 186, 420, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 224, 558, 18, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.1  ·  界面/字体/过场字幕/开场动画  ·  兼容 Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 250, 560, 20, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.1.3  ·  界面/字体/过场字幕/开场动画  ·  兼容 Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 250, 560, 20, hwnd, NULL, h, NULL);
         {
             HWND c = GetWindow(hwnd, GW_CHILD);
             while (c) { SendMessageW(c, WM_SETFONT, (WPARAM)font, TRUE); c = GetWindow(c, GW_HWNDNEXT); }
         }
         CheckRadioButton(hwnd, ID_R_AUTO, ID_R_VA, ID_R_AUTO);
-        CheckRadioButton(hwnd, ID_S_OVER, ID_S_EMB, ID_S_OVER);
         const WCHAR* guesses[] = {
             L"E:\\GOG Games\\Star Wars - Battlefront 2\\GameData",
             L"C:\\GOG Games\\Star Wars - Battlefront 2\\GameData",
@@ -335,12 +332,12 @@ void __stdcall EntryPoint() {
     {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        const WCHAR* sdir = NULL; int srm = 1, semb = 0, silent = 0;
+        const WCHAR* sdir = NULL; int srm = 1, semb = 1, silent = 0;
         for (int i = 1; argv && i < argc; i++) {
             if (str_cmpiW(argv[i], L"--silent") == 0) silent = 1;
             else if (str_ncmpW(argv[i], L"--dir=", 6) == 0) sdir = argv[i] + 6;
             else if (str_ncmpW(argv[i], L"--edition=", 10) == 0) srm = (str_cmpiW(argv[i] + 10, L"remaster") == 0);
-            else if (str_ncmpW(argv[i], L"--mode=", 7) == 0) semb = (str_cmpiW(argv[i] + 7, L"embed") == 0);
+            else if (str_ncmpW(argv[i], L"--mode=", 7) == 0) semb = 1;
         }
         if (silent && sdir) {
             if (!load_index()) ExitProcess(2);
@@ -371,7 +368,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.1",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.1.3",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 620, 320, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

@@ -202,7 +202,7 @@ def build_font(D, cps, size, W, H, y_off=0, fh_override=0, ss=1.0):
         out += b"\x00" * ((4 - (8+sz) % 4) % 4)
     return out, rendered
 
-LOAD_IDS = (2478589025, 1694151954)
+LOAD_IDS = ()  # 原版载入页不做位移（英文原版本身就是贴合装饰带的位置）
 LOAD_CHARS = []
 for _id in LOAD_IDS:
     for c in (zh_map.get(_id) or ""):
@@ -213,9 +213,9 @@ EXTRA = []
 print("load big glyphs:", len(EXTRA))
 
 PLAN = {
-    "gamefont_large":      (17, 1024, 1024, 0),
-    "gamefont_medium":     (18, 1024, 1024, 0),
-    "gamefont_small":      (18, 1024, 1024, 0),
+    "gamefont_large":      (22, 2048, 2048, 0),
+    "gamefont_medium":     (19, 1024, 1024, 0),
+    "gamefont_small":      (17, 1024, 1024, 0),
     "gamefont_tiny":       (13, 1024, 1024, 3),
     "gamefont_super_tiny": (13, 1024, 1024, 3),
 }
@@ -249,7 +249,7 @@ for ch in locl.find_locl_chunks(L):
                 break
         if int(e["id"]) in LOAD_IDS:
             conv = "".join(chr(sur.get(ord(c), ord(c))) for c in conv)
-            conv = "\u0301" + conv + "\u0302"
+            conv = "\u0303" + conv + "\u0304"
         else:
             conv = "".join(chr(sur.get(ord(c), ord(c))) for c in conv)
             if int(e["id"]) in (3975694703, 3408044191):

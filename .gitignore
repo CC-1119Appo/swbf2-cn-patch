@@ -1,0 +1,24 @@
+# 构建产物
+*.obj
+*.exe
+*.dll
+*.pdb
+*.ilk
+build/
+installer_base.exe
+payload.bin
+SWBF2_CN_Setup*.exe
+
+# 游戏资源（禁止入库）
+*.lvl
+*.mvs
+*.bik
+*.mp4
+
+# Python
+__pycache__/
+*.pyc
+
+# 临时
+*.log
+temp/

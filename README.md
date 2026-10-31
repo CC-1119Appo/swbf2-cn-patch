@@ -12,7 +12,7 @@
 - **开场动画字幕**：旧共和国的陨落 / 帝国的崛起，同样内嵌
 - **部署界面修复**：修正「单位数量」与「部署」按钮重叠
 - **官方译名**：对齐星球大战中文网译名库（Kashyyyk → 卡希克、Mygeeto → 麦基托 等）
-- **单文件安装器**：选目录 → 选版本 → 安装，兼容 Windows XP SP3 及以上
+- **单文件安装器**：版本检测 + 可选安装 + 一键还原，兼容 Windows XP SP3 及以上
 
 > **v1.1.3 起只提供「封装动画」版本**：字幕直接烧在影片里，GOG 与 Steam 表现一致，不依赖运行时钩子。
 
@@ -22,21 +22,40 @@
 
 | 文件 | 说明 |
 |---|---|
-| SWBF2_汉化安装器_v1.1.3.exe | **推荐**：单文件安装器，自动检测版本 |
+| SWBF2_汉化安装器_v1.1.3.exe | **推荐**：单文件安装器（含版本检测与一键还原） |
 | SWBF2_汉化_Remaster_封装动画_v1.1.3.zip | 手动包（Remaster） |
 | SWBF2_汉化_原版_封装动画_v1.1.3.zip | 手动包（原版 / Steam） |
 
-## 快速开始
+## 安装
 
-1. 运行安装器 → 选择 `...\Star Wars - Battlefront 2\GameData`
-2. 选择游戏版本（自动检测 / Remaster / 原版）
-3. 安装完成后用 **`SWBF2_CN.exe`** 启动
+1. 运行安装器 → 选择 `...\Star Wars - Battlefront 2\GameData`（Steam 为 `...\Star Wars Battlefront II Classic\GameData`）
+2. 点击 **「检测版本」**，会显示平台、主程序大小、**Remaster 是否已安装**，并自动勾选建议的安装版本（可手动改）
+3. 点击「开始安装」，完成后用 **`SWBF2_CN.exe`** 启动
 
-静默安装：
+### 版本识别规则
+
+| 版本 | 主程序大小 | core.lvl | 原版文件族 |
+|---|---|---|---|
+| GOG 2018 修订 | 4,366,848 | 7,193,880 | modern |
+| Steam | 4,357,632 | 7,193,880 | modern |
+| GOG 经典版 | 4,608,000 | 7,192,668 | old |
+
+Remaster 检测：`GameData\addon\Remaster` 目录是否存在。
+
+### 静默安装
 
 ```bat
-SWBF2_汉化安装器_v1.1.3.exe --silent --dir="E:\GOG Games\Star Wars - Battlefront 2\GameData" --edition=remaster
+SWBF2_汉化安装器_v1.1.3.exe --silent --dir="E:\...\GameData" --edition=remaster
+SWBF2_汉化安装器_v1.1.3.exe --detect --dir="E:\...\GameData"        # 只检测，写 detect.txt
 ```
+
+## 还原
+
+| 方式 | 作用 |
+|---|---|
+| **还原原版**（安装器按钮 / `--restore-orig`） | 用内置的原始 `core.lvl`/`ingame.lvl`/`shell.lvl`（modern / old 两族）覆盖回去，并删除 `cn_hook.dll`、`SWBF2_CN.exe` |
+| **还原备份**（安装器按钮 / `--restore`） | 还原安装时自动备份到 `GameData\_cn_backup\` 的文件 |
+| Steam/GOG 验证文件 | 影片（`ingame.mvs` / `crawl.mvs`）用平台自带功能恢复 |
 
 ## 从源码构建
 

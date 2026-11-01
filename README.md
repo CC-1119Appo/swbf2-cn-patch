@@ -22,7 +22,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| SWBF2_汉化安装器_v1.2.1.exe | **推荐**：单文件安装器（含版本检测与一键还原） |
+| SWBF2_CN_Installer_v1.2.1.exe | **推荐**：单文件安装器（含版本检测与一键还原） |
 
 ## 安装
 
@@ -43,8 +43,8 @@ Remaster 检测：`GameData\addon\Remaster` 目录是否存在。
 ### 静默安装
 
 ```bat
-SWBF2_汉化安装器_v1.2.1.exe --silent --dir="E:\...\GameData" --edition=remaster
-SWBF2_汉化安装器_v1.2.1.exe --detect --dir="E:\...\GameData"        # 只检测，写 detect.txt
+SWBF2_CN_Installer_v1.2.1.exe --silent --dir="E:\...\GameData" --edition=remaster
+SWBF2_CN_Installer_v1.2.1.exe --detect --dir="E:\...\GameData"        # 只检测，写 detect.txt
 ```
 
 ## 还原

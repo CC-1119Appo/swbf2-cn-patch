@@ -12,7 +12,7 @@
 
 ## 使用
 
-1. 运行 `SWBF2_汉化安装器_v1.2.1.exe`
+1. 运行 `SWBF2_CN_Installer_v1.2.1.exe`
 2. 选择游戏目录 → 点「检测版本」（会显示系统、平台、Remaster、汉化状态）
 3. 确认「安装版本」与「启动器」，点「开始安装」
 4. 用 `SWBF2_CN.exe`（Vista+）或 `SWBF2_CN_XP.exe`（XP）启动

@@ -15,7 +15,6 @@
 
 #define ID_PATH    101
 #define ID_BROWSE  102
-#define ID_R_AUTO  110
 #define ID_R_RM    111
 #define ID_R_VA    112
 #define ID_S_OVER  120
@@ -25,6 +24,8 @@
 #define ID_DETECT 132
 #define ID_RESTORE_ORIG 133
 #define ID_RESULT 142
+#define ID_L_MOD 160
+#define ID_L_XP 161
 #define ID_PROG    140
 #define ID_STATUS  141
 
@@ -260,6 +261,8 @@ static void cleanup_subs(const WCHAR* dir) {
     RemoveDirectoryW(sd);   // 空目录才会成功
 }
 
+static int g_xpMode = -1;  // 1=XP 版, 0=Vista+ 版, -1=按系统自动
+
 static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) {
     static WCHAR logp[2048];
     str_copyW(logp, dir, 2048);
@@ -286,6 +289,13 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
     for (unsigned int i = 0; i < g_count && ok; i++) {
         const char* n = g_entries[i].name;
         if (!(has_prefix(n, pre) || has_prefix(n, "S/") || (embed && has_prefix(n, "M/")))) continue;
+        // 启动器互斥：按选择的系统版本只装一套
+        if (has_prefix(n, "S/")) {
+            int isXpFile = (lstrcmpA(n, "S/SWBF2_CN_XP.exe") == 0 || lstrcmpA(n, "S/cn_hook_xp.dll") == 0);
+            int isModFile = (lstrcmpA(n, "S/SWBF2_CN.exe") == 0 || lstrcmpA(n, "S/cn_hook.dll") == 0);
+            if (g_xpMode && isModFile) { log_line("skip modern launcher"); continue; }
+            if (!g_xpMode && isXpFile) { log_line("skip xp launcher"); continue; }
+        }
         // Remaster 自带的 ingame.lvl：仅当仍是未打补丁的原文件时才替换（装了 Extension 的保持原样）
         if (isRemaster && lstrcmpA(n, "R/data/_lvl_pc/ingame.lvl") == 0) {
             static WCHAR probe[2048];
@@ -427,6 +437,55 @@ static int run_restore_original(const WCHAR* dir, int family) {
     return n;
 }
 
+static unsigned int g_osMajor = 0, g_osMinor = 0, g_osBuild = 0;
+
+// RtlGetVersion 不受 manifest 影响，能取到真实版本（XP 起就存在）
+typedef struct tagOSVI {
+    ULONG dwOSVersionInfoSize;
+    ULONG dwMajorVersion;
+    ULONG dwMinorVersion;
+    ULONG dwBuildNumber;
+    ULONG dwPlatformId;
+    WCHAR szCSDVersion[128];
+} OSVI;
+
+static void os_version() {
+    if (g_osMajor) return;
+    OSVI vi;
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    typedef LONG (WINAPI *tRtlGetVersion)(OSVI*);
+    tRtlGetVersion fn = (tRtlGetVersion)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
+    if (fn && fn(&vi) == 0) {
+        g_osMajor = vi.dwMajorVersion;
+        g_osMinor = vi.dwMinorVersion;
+        g_osBuild = vi.dwBuildNumber;
+        return;
+    }
+    OSVERSIONINFOW vo;
+    vo.dwOSVersionInfoSize = sizeof(vo);
+    if (GetVersionExW(&vo)) {
+        g_osMajor = vo.dwMajorVersion;
+        g_osMinor = vo.dwMinorVersion;
+        g_osBuild = vo.dwBuildNumber;
+    }
+}
+
+static const WCHAR* os_name() {
+    os_version();
+    unsigned int M = g_osMajor, m = g_osMinor, B = g_osBuild;
+    if (M == 5 && m == 1) return L"Windows XP";
+    if (M == 5 && m == 2) return L"Windows XP x64 / Server 2003";
+    if (M == 6 && m == 0) return L"Windows Vista";
+    if (M == 6 && m == 1) return L"Windows 7";
+    if (M == 6 && m == 2) return L"Windows 8";
+    if (M == 6 && m == 3) return L"Windows 8.1";
+    if (M == 10 && B >= 22000) return L"Windows 11";
+    if (M == 10) return L"Windows 10";
+    if (M > 10) return L"Windows（新版本）";
+    return L"Windows（其他版本）";
+}
+static int os_is_xp() { return g_osMajor == 5; }
+
 static void do_install_gui(HWND hwnd) {
     static WCHAR dir[2048];
     dir[0] = 0;
@@ -437,6 +496,7 @@ static void do_install_gui(HWND hwnd) {
         return;
     }
     int rm_mode = (SendMessageW(GetDlgItem(hwnd, ID_R_RM), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    g_xpMode = (SendMessageW(GetDlgItem(hwnd, ID_L_XP), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
     int embed = 1;
     int isRemaster = rm_mode;
 
@@ -472,19 +532,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CreateWindowW(L"BUTTON", L"原版 1.1 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 18, 214, 220, 20, hwnd, (HMENU)ID_R_VA, h, NULL);
         CreateWindowW(L"STATIC", L"过场与开场字幕已烧录进影片，无需设置", WS_CHILD | WS_VISIBLE, 250, 192, 370, 40, hwnd, NULL, h, NULL);
 
-        g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 268, 110, 30, hwnd, (HMENU)ID_INSTALL, h, NULL);
-        CreateWindowW(L"BUTTON", L"还原原版", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 138, 268, 110, 30, hwnd, (HMENU)ID_RESTORE_ORIG, h, NULL);
-        CreateWindowW(L"BUTTON", L"还原备份", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 268, 110, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
+        CreateWindowW(L"STATIC", L"启动器：", WS_CHILD | WS_VISIBLE, 18, 254, 70, 20, hwnd, NULL, h, NULL);
+        CreateWindowW(L"BUTTON", L"Vista 及以上", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP, 92, 254, 110, 20, hwnd, (HMENU)ID_L_MOD, h, NULL);
+        CreateWindowW(L"BUTTON", L"Windows XP", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 208, 254, 100, 20, hwnd, (HMENU)ID_L_XP, h, NULL);
+        CreateWindowW(L"STATIC", L"（已按本机系统预选，可手动改）", WS_CHILD | WS_VISIBLE, 316, 254, 300, 20, hwnd, NULL, h, NULL);
 
-        g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 274, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
-        g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 306, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.2.0  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 330, 600, 18, hwnd, NULL, h, NULL);
+        g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 286, 110, 30, hwnd, (HMENU)ID_INSTALL, h, NULL);
+        CreateWindowW(L"BUTTON", L"还原原版", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 138, 286, 110, 30, hwnd, (HMENU)ID_RESTORE_ORIG, h, NULL);
+        CreateWindowW(L"BUTTON", L"还原备份", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 286, 110, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
+
+        g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 292, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
+        g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.2.0  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
             while (ch) { SendMessageW(ch, WM_SETFONT, (WPARAM)font, TRUE); ch = GetWindow(ch, GW_HWNDNEXT); }
         }
         CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, ID_R_VA);
+        os_name();
+        CheckRadioButton(hwnd, ID_L_MOD, ID_L_XP, os_is_xp() ? ID_L_XP : ID_L_MOD);
         {
             const WCHAR* guesses[] = {
                 L"E:\\GOG Games\\Star Wars - Battlefront 2\\GameData",
@@ -546,11 +613,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (file_exists_w(ck)) wsprintfW(cnState, L"已安装（无版本标记）");
                     else wsprintfW(cnState, L"未安装");
                 }
-                wsprintfW(out, L"平台：%s\r\n主程序：%u 字节\r\nRemaster 1.5r2：%s\r\n汉化补丁：%s\r\n建议安装：%s",
-                          plat, exe,
+                os_version();
+                static WCHAR osFull[96];
+                wsprintfW(osFull, L"%s  (%u.%u.%u)", os_name(), g_osMajor, g_osMinor, g_osBuild);
+                wsprintfW(out, L"操作系统：%s\r\n平台：%s\r\n主程序：%u 字节\r\nRemaster 1.5r2：%s\r\n汉化补丁：%s\r\n建议安装：%s",
+                          osFull, plat, exe,
                           g_remaster ? L"已安装" : L"未安装",
                           cnState,
                           g_remaster ? L"Remaster 版" : L"原版 1.1 版");
+                CheckRadioButton(hwnd, ID_L_MOD, ID_L_XP, os_is_xp() ? ID_L_XP : ID_L_MOD);
             }
             SetWindowTextW(GetDlgItem(hwnd, ID_RESULT), out);
             CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, g_remaster ? ID_R_RM : ID_R_VA);
@@ -617,6 +688,7 @@ void __stdcall EntryPoint() {
             else if (str_cmpiW(argv[i], L"--restore") == 0) silent |= 0x100;
             else if (str_cmpiW(argv[i], L"--detect") == 0) silent |= 0x200;
             else if (str_cmpiW(argv[i], L"--restore-orig") == 0) silent |= 0x400;
+            else if (str_ncmpW(argv[i], L"--launcher=", 11) == 0) g_xpMode = (str_cmpiW(argv[i] + 11, L"xp") == 0) ? 1 : 0;
         }
         if ((silent & 0x400) && sdir) {
             detect_version(sdir);
@@ -648,6 +720,11 @@ void __stdcall EntryPoint() {
                     if (!has) { join2(sdir, L"cn_hook.dll", ck); has = file_exists_w(ck) ? 2 : 0; }
                     k += u32_to_str((unsigned int)has, b + k);
                 }
+                os_version();
+                b[k++] = ' '; b[k++] = 'o'; b[k++] = 's'; b[k++] = '=';
+                k += u32_to_str(g_osMajor, b + k);
+                b[k++] = '.'; k += u32_to_str(g_osMinor, b + k);
+                b[k++] = '.'; k += u32_to_str(g_osBuild, b + k);
                 b[k] = 0;
                 DWORD w = 0; WriteFile(h, b, (DWORD)k, &w, NULL); CloseHandle(h);
             }
@@ -660,6 +737,8 @@ void __stdcall EntryPoint() {
         }
         if (silent && sdir) {
             if (!load_index()) ExitProcess(2);
+            os_name();
+            if (g_xpMode < 0) g_xpMode = os_is_xp() ? 1 : 0;
             int n = run_install(sdir, srm, semb, 1);
             ExitProcess(n >= 0 ? 0 : 3);
         }
@@ -689,7 +768,7 @@ void __stdcall EntryPoint() {
     RegisterClassExW(&wc);
     g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.2.0",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 650, 395, NULL, NULL, wc.hInstance, NULL);
+                              CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);
     ShowWindow(g_hMain, SW_SHOW);
     UpdateWindow(g_hMain);

@@ -2,7 +2,7 @@
 
 ## 方式一：安装器（推荐）
 
-1. 从 [Releases](../../releases) 下载 `SWBF2_汉化安装器_v1.2.0.3.exe`
+1. 从 [Releases](../../releases) 下载 `SWBF2_汉化安装器_v1.2.1.3.exe`
 2. 双击运行（未签名，SmartScreen 提示时选「更多信息 → 仍要运行」）
 3. 选择游戏目录：`...\Star Wars - Battlefront 2\GameData`
    - 安装器会自动探测 GOG / Steam 常见路径

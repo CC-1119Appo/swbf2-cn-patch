@@ -261,6 +261,9 @@ static void cleanup_subs(const WCHAR* dir) {
     RemoveDirectoryW(sd);   // 空目录才会成功
 }
 
+static const WCHAR* os_name();
+static int os_is_xp();
+
 static int g_xpMode = -1;  // 1=XP 版, 0=Vista+ 版, -1=按系统自动
 
 static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) {
@@ -278,6 +281,12 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         log_line(nb);
     }
 
+    if (g_xpMode < 0) { os_name(); g_xpMode = os_is_xp() ? 1 : 0; }
+    {   // 清掉与当前系统不匹配的另一份 DLL，避免残留
+        static WCHAR junk[2048];
+        join2(dir, g_xpMode == 1 ? L"cn_hook.dll" : L"cn_hook_xp.dll", junk);
+        DeleteFileW(junk);
+    }
     g_totalBytes = 0; g_doneBytes = 0;
     const char* pre = isRemaster ? "R/" : "V/";
     for (unsigned int i = 0; i < g_count; i++) {
@@ -289,6 +298,13 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
     for (unsigned int i = 0; i < g_count && ok; i++) {
         const char* n = g_entries[i].name;
         if (!(has_prefix(n, pre) || has_prefix(n, "S/") || (embed && has_prefix(n, "M/")))) continue;
+        // 只装与系统匹配的字体模块 DLL
+        if (has_prefix(n, "S/")) {
+            int isXpDll = (lstrcmpA(n, "S/cn_hook_xp.dll") == 0);
+            int isModDll = (lstrcmpA(n, "S/cn_hook.dll") == 0);
+            if (g_xpMode == 1 && isModDll) { log_line("skip modern dll"); continue; }
+            if (g_xpMode != 1 && isXpDll) { log_line("skip xp dll"); continue; }
+        }
         // Remaster 自带的 ingame.lvl：仅当仍是未打补丁的原文件时才替换（装了 Extension 的保持原样）
         if (isRemaster && lstrcmpA(n, "R/data/_lvl_pc/ingame.lvl") == 0) {
             static WCHAR probe[2048];
@@ -307,7 +323,7 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         join2(dir, L"cn_patch.txt", mk);
         HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (mh != INVALID_HANDLE_VALUE) {
-            const char* txt = isRemaster ? "v1.3.0 remaster" : "v1.3.0 vanilla";
+            const char* txt = isRemaster ? "v1.3.1 remaster" : "v1.3.1 vanilla";
             DWORD w = 0;
             WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
             CloseHandle(mh);
@@ -532,7 +548,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 292, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.3.0  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.3.1  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
@@ -540,7 +556,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, ID_R_VA);
         os_name();
-        CheckRadioButton(hwnd, ID_L_MOD, ID_L_XP, os_is_xp() ? ID_L_XP : ID_L_MOD);
         {
             const WCHAR* guesses[] = {
                 L"E:\\GOG Games\\Star Wars - Battlefront 2\\GameData",
@@ -610,7 +625,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                           g_remaster ? L"已安装" : L"未安装",
                           cnState,
                           g_remaster ? L"Remaster 版" : L"原版 1.1 版");
-                CheckRadioButton(hwnd, ID_L_MOD, ID_L_XP, os_is_xp() ? ID_L_XP : ID_L_MOD);
             }
             SetWindowTextW(GetDlgItem(hwnd, ID_RESULT), out);
             CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, g_remaster ? ID_R_RM : ID_R_VA);
@@ -756,7 +770,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.0",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.1",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

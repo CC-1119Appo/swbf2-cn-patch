@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.3.1
+- 修复：即使未选择 Windows XP，仍会把 `cn_hook_xp.dll` 复制进游戏目录
+- 现在按系统只安装匹配的一份字体模块：Vista+ → `cn_hook.dll`，XP → `cn_hook_xp.dll`
+- 安装时会顺带删除另一份不匹配的旧 DLL
+
 ## v1.3.0
 - **移除启动器**（`SWBF2_CN.exe` / `SWBF2_CN_XP.exe`），直接运行 `BattlefrontII.exe` 即可
 - Remaster 版 `core.lvl` 不再插入定位标记字符，**脱离 DLL 钩子也能正常显示中文**

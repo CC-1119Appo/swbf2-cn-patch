@@ -29,7 +29,7 @@
 #define ID_PROG    140
 #define ID_STATUS  141
 
-static HWND g_hPath, g_hStatus, g_hProg, g_hBtn, g_hMain;
+static HWND g_hPath, g_hStatus, g_hProg, g_hBtn, g_hMain, g_hRestoreState, g_hTip;
 static WCHAR g_self[MAX_PATH];
 static HANDLE g_logFile = INVALID_HANDLE_VALUE;
 
@@ -326,7 +326,7 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         join2(dir, L"cn_patch.txt", mk);
         HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (mh != INVALID_HANDLE_VALUE) {
-            const char* txt = isRemaster ? "v1.3.2 remaster" : "v1.3.2 vanilla";
+            const char* txt = isRemaster ? "v1.3.3 remaster" : "v1.3.3 vanilla";
             DWORD w = 0;
             WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
             CloseHandle(mh);
@@ -386,6 +386,58 @@ static void join2(const WCHAR* dir, const WCHAR* rel, WCHAR* out) {
 }
 
 static int dir_exists_w(const WCHAR* p) { return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES; }
+
+// 各版本补丁安装后的期望文件大小（用于判断汉化是否完整）
+#define SZ_V_CORE   25065520u
+#define SZ_V_INGAME 15041988u
+#define SZ_C_CORE   25037332u
+#define SZ_R_CORE   19655772u
+#define SZ_R_FONT_D 19818060u
+#define SZ_R_FONT_2K 44983812u
+#define SZ_R_FONT_4K 44983812u
+#define SZ_M_CRAWL  114149376u
+#define SZ_M_INGAME 762167296u
+
+#define LS_CORE   1
+#define LS_INGAME 2
+#define LS_FONTS  4
+#define LS_MOVIES 8
+#define LS_ALL    15
+
+static unsigned int check_localization(const WCHAR* dir, int remaster) {
+    static WCHAR p[2048];
+    unsigned int have = 0;
+    join2(dir, L"data\\_lvl_pc\\core.lvl", p);
+    unsigned int core = file_size_w(p);
+    int isCd = (g_family == 2);
+    if ((!remaster && (core == SZ_V_CORE || core == SZ_C_CORE)) || (remaster && core == SZ_R_CORE)) have |= LS_CORE;
+
+    if (!remaster) {
+        join2(dir, L"data\\_lvl_pc\\ingame.lvl", p);
+        if (file_size_w(p) == SZ_V_INGAME) have |= LS_INGAME;
+    } else {
+        join2(dir, L"addon\\Remaster\\Fonts\\arialblack_default.lvl", p);
+        unsigned int f1 = file_size_w(p);
+        join2(dir, L"addon\\Remaster\\Fonts\\arialblack_2k.lvl", p);
+        unsigned int f2 = file_size_w(p);
+        join2(dir, L"addon\\Remaster\\Fonts\\arialblack_4k.lvl", p);
+        unsigned int f3 = file_size_w(p);
+        if (f1 == SZ_R_FONT_D && f2 == SZ_R_FONT_2K && f3 == SZ_R_FONT_4K) have |= LS_FONTS;
+    }
+
+    join2(dir, L"data\\_lvl_pc\\movies\\crawl.mvs", p);
+    unsigned int m1 = file_size_w(p);
+    join2(dir, L"data\\_lvl_pc\\movies\\ingame.mvs", p);
+    unsigned int m2 = file_size_w(p);
+    if (m1 == SZ_M_CRAWL && m2 == SZ_M_INGAME) have |= LS_MOVIES;
+
+    (void)isCd;
+    return have;
+}
+
+static unsigned int need_mask(int remaster) {
+    return remaster ? (LS_CORE | LS_FONTS | LS_MOVIES) : (LS_CORE | LS_INGAME | LS_MOVIES);
+}
 
 static void detect_version(const WCHAR* dir) {
     static WCHAR p[2048];
@@ -498,6 +550,27 @@ static const WCHAR* os_name() {
 }
 static int os_is_xp() { return g_osMajor == 5; }
 
+static void add_tip(HWND hwnd, HWND ctl, const WCHAR* text) {
+    if (!g_hTip || !ctl) return;
+    TOOLINFOW ti;
+    ti.cbSize = sizeof(ti);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = hwnd;
+    ti.uId = (UINT_PTR)ctl;
+    ti.hinst = NULL;
+    ti.lpszText = (LPWSTR)text;
+    ti.lParam = 0;
+    SendMessageW(g_hTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+}
+
+static void update_restore_state(HWND hwnd, const WCHAR* dir) {
+    if (!g_hRestoreState) return;
+    static WCHAR bk[2048];
+    join2(dir, L"_cn_backup", bk);
+    BOOL ok = (GetFileAttributesW(bk) != INVALID_FILE_ATTRIBUTES);
+    EnableWindow(g_hRestoreState, ok);
+}
+
 static void do_install_gui(HWND hwnd) {
     static WCHAR dir[2048];
     dir[0] = 0;
@@ -547,17 +620,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 286, 110, 30, hwnd, (HMENU)ID_INSTALL, h, NULL);
         CreateWindowW(L"BUTTON", L"还原原版", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 138, 286, 110, 30, hwnd, (HMENU)ID_RESTORE_ORIG, h, NULL);
-        CreateWindowW(L"BUTTON", L"还原备份", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 286, 110, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
+        g_hRestoreState = CreateWindowW(L"BUTTON", L"恢复先前游戏状态", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 286, 140, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
 
-        g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 292, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
+        g_hTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd, NULL, h, NULL);
+        if (g_hTip) {
+            add_tip(hwnd, GetDlgItem(hwnd, ID_BROWSE), L"选择游戏的 GameData 目录");
+            add_tip(hwnd, GetDlgItem(hwnd, ID_DETECT), L"检测操作系统、游戏平台（GOG/Steam/CD）、Remaster 补丁与当前汉化完整度");
+            add_tip(hwnd, GetDlgItem(hwnd, ID_INSTALL), L"把中文文本、字体与中文字幕影片写入游戏目录\n已存在的文件会先备份到 GameData\\_cn_backup");
+            add_tip(hwnd, GetDlgItem(hwnd, ID_RESTORE_ORIG), L"用安装包内置的官方原始文件（core / ingame / shell）覆盖回去\n适用于彻底移除汉化、回到英文原版");
+            add_tip(hwnd, GetDlgItem(hwnd, ID_RESTORE), L"把游戏恢复成安装本补丁之前的状态\n使用安装时自动备份的文件，仅当存在备份时可用");
+        }
+        g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 408, 292, 230, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.3.2  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.3.3  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
             while (ch) { SendMessageW(ch, WM_SETFONT, (WPARAM)font, TRUE); ch = GetWindow(ch, GW_HWNDNEXT); }
         }
         CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, ID_R_VA);
+        { static WCHAR g0[2048]; GetWindowTextW(g_hPath, g0, 2048); update_restore_state(hwnd, g0); }
         os_name();
         {
             const WCHAR* guesses[] = {
@@ -605,21 +688,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 else if (g_platform == 4) plat = L"CD 版 1.0（2005 原始盘）";
                 static WCHAR mk[2048];
                 join2(dir, L"cn_patch.txt", mk);
-                WCHAR cnState[96];
+                WCHAR ver[64];
+                ver[0] = 0;
                 if (file_exists_w(mk)) {
                     HANDLE mh = CreateFileW(mk, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
                     static char buf[64];
                     buf[0] = 0;
                     DWORD rd = 0;
                     if (mh != INVALID_HANDLE_VALUE) { ReadFile(mh, buf, 60, &rd, NULL); CloseHandle(mh); }
-                    WCHAR ver[64];
                     MultiByteToWideChar(CP_UTF8, 0, buf, -1, ver, 64);
-                    wsprintfW(cnState, L"已安装（%s）", ver);
+                }
+                unsigned int have = check_localization(dir, g_remaster);
+                unsigned int need = need_mask(g_remaster);
+                WCHAR cnState[192];
+                if (!file_exists_w(mk) && have == 0) {
+                    lstrcpyW(cnState, L"未安装");
+                } else if ((have & need) == need) {
+                    if (ver[0]) wsprintfW(cnState, L"已安装（完整 · %s）", ver);
+                    else lstrcpyW(cnState, L"已安装（完整）");
                 } else {
-                    static WCHAR ck[2048];
-                    join2(dir, L"cn_hook.dll", ck);
-                    if (file_exists_w(ck)) wsprintfW(cnState, L"已安装（无版本标记）");
-                    else wsprintfW(cnState, L"未安装");
+                    WCHAR miss[128];
+                    miss[0] = 0;
+                    if (!(have & LS_CORE)) lstrcatW(miss, L"核心文本 ");
+                    if (!g_remaster && !(have & LS_INGAME)) lstrcatW(miss, L"部署修复 ");
+                    if (g_remaster && !(have & LS_FONTS)) lstrcatW(miss, L"Remaster 字体 ");
+                    if (!(have & LS_MOVIES)) lstrcatW(miss, L"字幕影片 ");
+                    wsprintfW(cnState, L"汉化未完全（缺：%s）→ 建议重新安装补齐", miss);
                 }
                 os_version();
                 static WCHAR osFull[96];
@@ -728,6 +822,13 @@ void __stdcall EntryPoint() {
                     if (!has) { join2(sdir, L"cn_hook.dll", ck); has = file_exists_w(ck) ? 2 : 0; }
                     k += u32_to_str((unsigned int)has, b + k);
                 }
+                {
+                    unsigned int hv = check_localization(sdir, g_remaster);
+                    unsigned int nd = need_mask(g_remaster);
+                    b[k++] = ' '; b[k++] = 'l'; b[k++] = 's'; b[k++] = '=';
+                    k += u32_to_str(hv, b + k);
+                    b[k++] = '/'; k += u32_to_str(nd, b + k);
+                }
                 os_version();
                 b[k++] = ' '; b[k++] = 'o'; b[k++] = 's'; b[k++] = '=';
                 k += u32_to_str(g_osMajor, b + k);
@@ -774,7 +875,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.2",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.3",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

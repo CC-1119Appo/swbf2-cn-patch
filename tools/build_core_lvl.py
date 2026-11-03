@@ -202,7 +202,7 @@ def build_font(D, cps, size, W, H, y_off=0, fh_override=0, ss=1.0):
         out += b"\x00" * ((4 - (8+sz) % 4) % 4)
     return out, rendered
 
-LOAD_IDS = (2478589025, 1694151954)
+LOAD_IDS = ()  # v1.3: 不再插入定位标记，脱离启动器/DLL 也能正常渲染
 LOAD_CHARS = []
 for _id in LOAD_IDS:
     for c in (zh_map.get(_id) or ""):

@@ -289,13 +289,6 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
     for (unsigned int i = 0; i < g_count && ok; i++) {
         const char* n = g_entries[i].name;
         if (!(has_prefix(n, pre) || has_prefix(n, "S/") || (embed && has_prefix(n, "M/")))) continue;
-        // 启动器互斥：按选择的系统版本只装一套
-        if (has_prefix(n, "S/")) {
-            int isXpFile = (lstrcmpA(n, "S/SWBF2_CN_XP.exe") == 0 || lstrcmpA(n, "S/cn_hook_xp.dll") == 0);
-            int isModFile = (lstrcmpA(n, "S/SWBF2_CN.exe") == 0 || lstrcmpA(n, "S/cn_hook.dll") == 0);
-            if (g_xpMode && isModFile) { log_line("skip modern launcher"); continue; }
-            if (!g_xpMode && isXpFile) { log_line("skip xp launcher"); continue; }
-        }
         // Remaster 自带的 ingame.lvl：仅当仍是未打补丁的原文件时才替换（装了 Extension 的保持原样）
         if (isRemaster && lstrcmpA(n, "R/data/_lvl_pc/ingame.lvl") == 0) {
             static WCHAR probe[2048];
@@ -314,7 +307,7 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         join2(dir, L"cn_patch.txt", mk);
         HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (mh != INVALID_HANDLE_VALUE) {
-            const char* txt = isRemaster ? "v1.2.1 remaster" : "v1.2.1 vanilla";
+            const char* txt = isRemaster ? "v1.3.0 remaster" : "v1.3.0 vanilla";
             DWORD w = 0;
             WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
             CloseHandle(mh);
@@ -496,7 +489,6 @@ static void do_install_gui(HWND hwnd) {
         return;
     }
     int rm_mode = (SendMessageW(GetDlgItem(hwnd, ID_R_RM), BM_GETCHECK, 0, 0) == BST_CHECKED);
-    g_xpMode = (SendMessageW(GetDlgItem(hwnd, ID_L_XP), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
     int embed = 1;
     int isRemaster = rm_mode;
 
@@ -532,10 +524,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CreateWindowW(L"BUTTON", L"原版 1.1 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 18, 214, 220, 20, hwnd, (HMENU)ID_R_VA, h, NULL);
         CreateWindowW(L"STATIC", L"过场与开场字幕已烧录进影片，无需设置", WS_CHILD | WS_VISIBLE, 250, 192, 370, 40, hwnd, NULL, h, NULL);
 
-        CreateWindowW(L"STATIC", L"启动器：", WS_CHILD | WS_VISIBLE, 18, 254, 70, 20, hwnd, NULL, h, NULL);
-        CreateWindowW(L"BUTTON", L"Vista 及以上", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP, 92, 254, 110, 20, hwnd, (HMENU)ID_L_MOD, h, NULL);
-        CreateWindowW(L"BUTTON", L"Windows XP", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 208, 254, 100, 20, hwnd, (HMENU)ID_L_XP, h, NULL);
-        CreateWindowW(L"STATIC", L"（已按本机系统预选，可手动改）", WS_CHILD | WS_VISIBLE, 316, 254, 300, 20, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"本版不含启动器：直接运行游戏目录下的 BattlefrontII.exe 即可", WS_CHILD | WS_VISIBLE, 18, 254, 600, 20, hwnd, NULL, h, NULL);
 
         g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 286, 110, 30, hwnd, (HMENU)ID_INSTALL, h, NULL);
         CreateWindowW(L"BUTTON", L"还原原版", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 138, 286, 110, 30, hwnd, (HMENU)ID_RESTORE_ORIG, h, NULL);
@@ -543,7 +532,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 292, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.2.1  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.3.0  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
@@ -639,6 +628,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             static WCHAR extra[2048];
             join2(dir, L"cn_hook.dll", extra); DeleteFileW(extra);
             join2(dir, L"SWBF2_CN.exe", extra); DeleteFileW(extra);
+            join2(dir, L"SWBF2_CN_XP.exe", extra); DeleteFileW(extra);
             join2(dir, L"cn_patch.txt", extra); DeleteFileW(extra);
             static WCHAR msg[512];
             wsprintfW(msg, L"已还原 %d 个原版文件（core/ingame/shell 及字体）。\r\n\r\n启动器与 SRT 已移除；影片请用 Steam/GOG 的「验证文件」恢复。", n);
@@ -766,7 +756,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.2.1",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.0",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

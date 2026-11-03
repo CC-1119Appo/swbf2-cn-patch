@@ -1,4 +1,4 @@
-# 星球大战：前线 II 简体中文补丁 v1.3.1
+# 星球大战：前线 II 简体中文补丁 v1.3.2
 
 **不再需要启动器**：直接运行 `BattlefrontII.exe` 即可，原版与 Remaster 都能正常显示中文。
 
@@ -12,7 +12,7 @@
 
 ## 下载
 
-**SWBF2_CN_Installer_v1.3.1.exe**（约 1.0 GB，单文件安装器）
+**SWBF2_CN_Installer_v1.3.2.exe**（约 1.0 GB，单文件安装器）
 
 ## 安装
 
@@ -29,7 +29,7 @@
 
 ## 兼容性
 
-- 原版（GOG 2018 / GOG 经典 / Steam）
+- 原版（GOG 2018 / GOG 经典 / Steam / **CD 1.0**）
 - Remaster 1.5r2（GOG / Steam 通用）
 - Windows XP SP3 及以上（安装器本身即为 XP 兼容构建）
 

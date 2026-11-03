@@ -261,6 +261,8 @@ static void cleanup_subs(const WCHAR* dir) {
     RemoveDirectoryW(sd);   // 空目录才会成功
 }
 
+static int g_family = 0;   // 0=modern 1=old 2=cd10
+static void detect_version(const WCHAR* dir);
 static const WCHAR* os_name();
 static int os_is_xp();
 
@@ -288,7 +290,8 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         DeleteFileW(junk);
     }
     g_totalBytes = 0; g_doneBytes = 0;
-    const char* pre = isRemaster ? "R/" : "V/";
+    detect_version(dir);
+    const char* pre = isRemaster ? "R/" : (g_family == 2 ? "C/" : "V/");
     for (unsigned int i = 0; i < g_count; i++) {
         const char* n = g_entries[i].name;
         if (has_prefix(n, pre) || has_prefix(n, "S/") || (embed && has_prefix(n, "M/")))
@@ -323,7 +326,7 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         join2(dir, L"cn_patch.txt", mk);
         HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (mh != INVALID_HANDLE_VALUE) {
-            const char* txt = isRemaster ? "v1.3.1 remaster" : "v1.3.1 vanilla";
+            const char* txt = isRemaster ? "v1.3.2 remaster" : "v1.3.2 vanilla";
             DWORD w = 0;
             WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
             CloseHandle(mh);
@@ -365,7 +368,6 @@ static int run_restore(const WCHAR* dir) {
 }
 
 static int g_platform = 0;   // 1=GOG2018 2=GOG经典 3=Steam
-static int g_family = 0;     // 0=modern 1=old
 static int g_remaster = 0;
 
 static unsigned int file_size_w(const WCHAR* p) {
@@ -395,6 +397,7 @@ static void detect_version(const WCHAR* dir) {
     if (exe == 4366848u) { g_platform = 1; g_family = 0; }        // GOG 2018
     else if (exe == 4608000u) { g_platform = 2; g_family = 1; }   // GOG 经典
     else if (exe == 4357632u) { g_platform = 3; g_family = 0; }   // Steam
+    else if (exe == 7790592u) { g_platform = 4; g_family = 2; }   // CD 1.0（2005 原始盘）
     else {
         join2(dir, L"steam_api.dll", p);
         if (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES) { g_platform = 3; g_family = 0; }
@@ -404,7 +407,7 @@ static void detect_version(const WCHAR* dir) {
 
 // 从内嵌的 O/<family>/ 与 O/fonts/ 还原原版文件
 static int run_restore_original(const WCHAR* dir, int family) {
-    const char* pref = family ? "O/old/" : "O/modern/";
+    const char* pref = (family == 2) ? "O/cd10/" : (family ? "O/old/" : "O/modern/");
     int n = 0;
     for (unsigned int i = 0; i < g_count; i++) {
         const char* name = g_entries[i].name;
@@ -548,7 +551,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 380, 292, 250, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.3.1  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.3.2  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
@@ -599,6 +602,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (g_platform == 1) plat = L"GOG 版（2018 修订）";
                 else if (g_platform == 2) plat = L"GOG 版（经典版 / 2017 前）";
                 else if (g_platform == 3) plat = L"Steam 版";
+                else if (g_platform == 4) plat = L"CD 版 1.0（2005 原始盘）";
                 static WCHAR mk[2048];
                 join2(dir, L"cn_patch.txt", mk);
                 WCHAR cnState[96];
@@ -710,7 +714,7 @@ void __stdcall EntryPoint() {
             HANDLE h = CreateFileW(outp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
             if (h != INVALID_HANDLE_VALUE) {
                 char b[256]; int k = 0;
-                const char* nm = g_platform == 1 ? "gog2018" : (g_platform == 2 ? "gogold" : (g_platform == 3 ? "steam" : "unknown"));
+                const char* nm = g_platform == 1 ? "gog2018" : (g_platform == 2 ? "gogold" : (g_platform == 3 ? "steam" : (g_platform == 4 ? "cd10" : "unknown")));
                 while (*nm) b[k++] = *nm++;
                 b[k++] = ' '; b[k++] = 'f'; b[k++] = 'a'; b[k++] = 'm'; b[k++] = '=';
                 k += u32_to_str((unsigned int)g_family, b + k);
@@ -770,7 +774,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.1",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.2",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

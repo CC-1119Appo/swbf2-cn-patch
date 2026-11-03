@@ -1,5 +1,11 @@
 # 更新日志
 
+## v1.3.2
+- **新增 CD 版 1.0（2005 原始盘）支持**：`BattlefrontII.exe` 7,790,592 字节、`core.lvl` 7,164,480 的版本
+- CD 版使用独立的中文 `core.lvl`（由 1.0 原始 core 构建）与 `ingame.lvl`（已修复部署界面重叠）
+- 一键还原内置 CD 1.0 的原始 core/ingame/shell
+- 版本检测新增「CD 版 1.0」识别
+
 ## v1.3.1
 - 修复：即使未选择 Windows XP，仍会把 `cn_hook_xp.dll` 复制进游戏目录
 - 现在按系统只安装匹配的一份字体模块：Vista+ → `cn_hook.dll`，XP → `cn_hook_xp.dll`

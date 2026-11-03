@@ -326,7 +326,7 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         join2(dir, L"cn_patch.txt", mk);
         HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (mh != INVALID_HANDLE_VALUE) {
-            const char* txt = isRemaster ? "v1.3.3 remaster" : "v1.3.3 vanilla";
+            const char* txt = isRemaster ? "v1.3.4 remaster" : "v1.3.4 vanilla";
             DWORD w = 0;
             WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
             CloseHandle(mh);
@@ -563,6 +563,32 @@ static void add_tip(HWND hwnd, HWND ctl, const WCHAR* text) {
     SendMessageW(g_hTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
 }
 
+static int del_tree(const WCHAR* path) {
+    static WCHAR pat[2048];
+    str_copyW(pat, path, 2048);
+    str_catW(pat, L"\\*", 2048);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!lstrcmpW(fd.cFileName, L".") || !lstrcmpW(fd.cFileName, L"..")) continue;
+            static WCHAR child[2048];
+            str_copyW(child, path, 2048);
+            str_catW(child, L"\\", 2048);
+            str_catW(child, fd.cFileName, 2048);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                del_tree(child);
+            } else {
+                SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(child);
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL);
+    return RemoveDirectoryW(path) ? 1 : 0;
+}
+
 static void update_restore_state(HWND hwnd, const WCHAR* dir) {
     if (!g_hRestoreState) return;
     static WCHAR bk[2048];
@@ -623,8 +649,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_hRestoreState = CreateWindowW(L"BUTTON", L"恢复先前游戏状态", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 286, 140, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
 
         g_hTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd, NULL, h, NULL);
+                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, h, NULL);
         if (g_hTip) {
+            SendMessageW(g_hTip, TTM_SETMAXTIPWIDTH, 0, 420);
+            SendMessageW(g_hTip, TTM_ACTIVATE, TRUE, 0);
             add_tip(hwnd, GetDlgItem(hwnd, ID_BROWSE), L"选择游戏的 GameData 目录");
             add_tip(hwnd, GetDlgItem(hwnd, ID_DETECT), L"检测操作系统、游戏平台（GOG/Steam/CD）、Remaster 补丁与当前汉化完整度");
             add_tip(hwnd, GetDlgItem(hwnd, ID_INSTALL), L"把中文文本、字体与中文字幕影片写入游戏目录\n已存在的文件会先备份到 GameData\\_cn_backup");
@@ -633,7 +661,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 408, 292, 230, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
         g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.3.3  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.3.4  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
@@ -701,19 +729,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 unsigned int have = check_localization(dir, g_remaster);
                 unsigned int need = need_mask(g_remaster);
                 WCHAR cnState[192];
-                if (!file_exists_w(mk) && have == 0) {
-                    lstrcpyW(cnState, L"未安装");
-                } else if ((have & need) == need) {
-                    if (ver[0]) wsprintfW(cnState, L"已安装（完整 · %s）", ver);
-                    else lstrcpyW(cnState, L"已安装（完整）");
+                if (have == 0) {
+                    lstrcpyW(cnState, L"未安装汉化包");
+                } else if (g_remaster && !(have & LS_CORE)) {
+                    lstrcpyW(cnState, L"Remaster 汉化未安装，请点击「开始安装」以补全汉化");
+                } else if ((have & need) != need) {
+                    lstrcpyW(cnState, L"汉化安装未完成，请点击「开始安装」以补全");
+                } else if (ver[0]) {
+                    wsprintfW(cnState, L"已安装（完整 · %s）", ver);
                 } else {
-                    WCHAR miss[128];
-                    miss[0] = 0;
-                    if (!(have & LS_CORE)) lstrcatW(miss, L"核心文本 ");
-                    if (!g_remaster && !(have & LS_INGAME)) lstrcatW(miss, L"部署修复 ");
-                    if (g_remaster && !(have & LS_FONTS)) lstrcatW(miss, L"Remaster 字体 ");
-                    if (!(have & LS_MOVIES)) lstrcatW(miss, L"字幕影片 ");
-                    wsprintfW(cnState, L"汉化未完全（缺：%s）→ 建议重新安装补齐", miss);
+                    lstrcpyW(cnState, L"已安装（完整）");
                 }
                 os_version();
                 static WCHAR osFull[96];
@@ -736,14 +761,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             detect_version(dir);
+            static WCHAR rmDir[2048];
+            join2(dir, L"addon\\Remaster", rmDir);
+            int hasRm = (GetFileAttributesW(rmDir) != INVALID_FILE_ATTRIBUTES);
+            if (MessageBoxW(hwnd,
+                    L"将用内置的官方原始文件覆盖 core / ingame / shell，并删除汉化启动器与安装标记。\r\n\r\n"
+                    L"确定还原为英文原版吗？",
+                    L"还原原版游戏", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
             int n = run_restore_original(dir, g_family);
+            int removedRm = 0;
+            if (hasRm) {
+                if (MessageBoxW(hwnd,
+                        L"检测到 Remaster 补丁（addon\\Remaster）。\r\n\r\n"
+                        L"是否一并移除 Remaster 模组，回到纯净原版游戏？\r\n"
+                        L"（选「否」则保留 Remaster）",
+                        L"移除 Remaster 补丁", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                    removedRm = del_tree(rmDir);
+                }
+            }
             static WCHAR extra[2048];
             join2(dir, L"cn_hook.dll", extra); DeleteFileW(extra);
             join2(dir, L"SWBF2_CN.exe", extra); DeleteFileW(extra);
             join2(dir, L"SWBF2_CN_XP.exe", extra); DeleteFileW(extra);
             join2(dir, L"cn_patch.txt", extra); DeleteFileW(extra);
             static WCHAR msg[512];
-            wsprintfW(msg, L"已还原 %d 个原版文件（core/ingame/shell 及字体）。\r\n\r\n启动器与 SRT 已移除；影片请用 Steam/GOG 的「验证文件」恢复。", n);
+            wsprintfW(msg, L"已还原 %d 个原版文件（core/ingame/shell）。%s\r\n\r\n影片请用 Steam/GOG 的「验证文件」恢复。",
+                      n, removedRm ? L"\r\nRemaster 补丁已移除。" : (hasRm ? L"\r\nRemaster 补丁已保留。" : L""));
             MessageBoxW(hwnd, msg, L"还原原版完成", MB_ICONINFORMATION);
         } else if (LOWORD(wp) == ID_INSTALL) {
             EnableWindow(g_hBtn, FALSE);
@@ -757,6 +800,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 MessageBoxW(hwnd, L"请先选择正确的 GameData 目录。", L"提示", MB_ICONWARNING);
                 return 0;
             }
+            if (MessageBoxW(hwnd,
+                    L"将把游戏恢复为安装本补丁之前的状态\r\n（使用 GameData\\_cn_backup 中的备份文件）。\r\n\r\n确定继续吗？",
+                    L"恢复先前游戏状态", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
             int n = run_restore(dir);
             if (n > 0) {
                 static WCHAR msg[256];
@@ -855,7 +901,7 @@ void __stdcall EntryPoint() {
 
     INITCOMMONCONTROLSEX icc;
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES;
     InitCommonControlsEx(&icc);
     if (!load_index()) {
         MessageBoxW(NULL, L"安装器数据损坏（找不到内嵌文件）。\r\n请重新下载完整的安装程序。", L"错误", MB_ICONERROR);
@@ -875,7 +921,7 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.3",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.4",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                               CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);

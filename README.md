@@ -1,16 +1,16 @@
-# 星球大战：前线 II 简体中文补丁 v1.3.3
+# 星球大战：前线 II 简体中文补丁 v1.3.4
 
 > 适用于 GOG / Steam 版《Star Wars: Battlefront II (2005)》，以及社区 **Remaster 1.5r2** 模组。
 
 ## 本版本说明
 
-**v1.3.3 起不再附带启动器**：直接运行游戏目录下的 **BattlefrontII.exe** 即可，无需 SWBF2_CN.exe。
+**v1.3.4 起不再附带启动器**：直接运行游戏目录下的 **BattlefrontII.exe** 即可，无需 SWBF2_CN.exe。
 中文字幕已烧录进影片，中文字体直接内置在 core.lvl（Remaster 版还内置在 addon\Remaster\Fonts），
 **不依赖任何运行时钩子**，原版与 Remaster 表现一致。
 
 ## 下载
 
-前往 [Releases](../../releases) 页面下载 **SWBF2_CN_Installer_v1.3.3.exe**。
+前往 [Releases](../../releases) 页面下载 **SWBF2_CN_Installer_v1.3.4.exe**。
 
 ## 包含内容
 
@@ -23,7 +23,7 @@
 
 ## 安装
 
-1. 运行 **SWBF2_CN_Installer_v1.3.3.exe**（未签名，SmartScreen 选「更多信息 → 仍要运行」）
+1. 运行 **SWBF2_CN_Installer_v1.3.4.exe**（未签名，SmartScreen 选「更多信息 → 仍要运行」）
 2. 选择游戏目录：
    - GOG：`...\Star Wars - Battlefront 2\GameData`
    - Steam：`...\steamapps\common\Star Wars Battlefront II Classic\GameData`
@@ -36,13 +36,13 @@
 ### 静默安装
 
 ```bat
-SWBF2_CN_Installer_v1.3.3.exe --silent --dir="E:\...\GameData" --edition=remaster
-SWBF2_CN_Installer_v1.3.3.exe --detect --dir="E:\...\GameData"     # 只检测，写 detect.txt
+SWBF2_CN_Installer_v1.3.4.exe --silent --dir="E:\...\GameData" --edition=remaster
+SWBF2_CN_Installer_v1.3.4.exe --detect --dir="E:\...\GameData"     # 只检测，写 detect.txt
 ```
 
 ## 关于 cn_hook.dll / cn_hook_xp.dll
 
-安装包会按系统只放入其中一个：Vista 及以上装 cn_hook.dll，Windows XP 装 cn_hook_xp.dll。v1.3.3 不需要它们也能正常显示中文，可手动删除。
+安装包会按系统只放入其中一个：Vista 及以上装 cn_hook.dll，Windows XP 装 cn_hook_xp.dll。v1.3.4 不需要它们也能正常显示中文，可手动删除。
 
 ## 还原
 

@@ -498,7 +498,7 @@ static void do_install_gui(HWND hwnd) {
     if (r >= 0) {
         SendMessageW(g_hProg, PBM_SETPOS, 100, 0);
         SetWindowTextW(g_hStatus, L"安装完成");
-        MessageBoxW(hwnd, L"安装完成！\r\n\r\n以后请用游戏目录下的 SWBF2_CN.exe 启动。\r\n如需还原，可用 GOG Galaxy 的「验证/修复文件」。", L"成功", MB_ICONINFORMATION);
+        MessageBoxW(hwnd, L"安装完成！\r\n\r\n本版不含启动器，直接运行游戏目录下的 BattlefrontII.exe 即可。\r\n如需还原，请用安装器的「还原原版」或 Steam/GOG 的「验证文件」。", L"成功", MB_ICONINFORMATION);
     } else {
         SetWindowTextW(g_hStatus, L"安装失败，详见 install_cn.log");
         MessageBoxW(hwnd, L"安装过程中出错，请查看 GameData\\install_cn.log。", L"失败", MB_ICONERROR);

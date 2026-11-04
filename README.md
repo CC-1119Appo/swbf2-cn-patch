@@ -80,7 +80,7 @@ Remaster 检测：`GameData\addon\Remaster` 目录是否存在。
 - 字体：IBM Plex Sans SC（github.com/IBM/plex）
 - Remaster 模组：[GT]Anakin
 - 工具：RAD Video Tools、ffmpeg、SWBF2 Mod Tools
-- 广西师范大学
+- Token提供：广西师范大学
 
 ## 免责声明
 

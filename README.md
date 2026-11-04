@@ -1,4 +1,4 @@
-# 星球大战：前线 II 简体中文补丁 v1.4.0
+# 星球大战：前线 II 简体中文包 v1.4.0
 
 > 适用于 GOG / Steam 版《Star Wars: Battlefront II (2005)》，以及社区 **Remaster 1.5r2** 模组。
 

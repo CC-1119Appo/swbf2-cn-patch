@@ -14,20 +14,21 @@ entries = []
 for i in range(cnt):
     nl = struct.unpack_from("<H", data, pos)[0]; pos += 2
     name = data[pos:pos+nl].decode(); pos += nl
-    off, size = struct.unpack_from("<QQ", data, pos); pos += 16
-    entries.append((name, off, size))
+    method = struct.unpack_from("<B", data, pos)[0]; pos += 1
+    off, sz, orig = struct.unpack_from("<QQQ", data, pos); pos += 24
+    entries.append((name, method, off, sz, orig))
 # 重写索引（绝对偏移）
-new_idx = len(data) - (len(data) - idx)  # 索引仍在同一位置
 pos = idx + 4
-for name, off, size in entries:
+for name, method, off, sz, orig in entries:
     nb = name.encode()
     struct.pack_into("<H", data, pos, len(nb)); pos += 2
     data[pos:pos+len(nb)] = nb; pos += len(nb)
-    struct.pack_into("<QQ", data, pos, off + base_size, size); pos += 16
-# 尾部索引偏移也改成绝对
+    struct.pack_into("<B", data, pos, method); pos += 1
+    struct.pack_into("<QQQ", data, pos, off + base_size, sz, orig); pos += 24
 struct.pack_into("<Q", data, len(data) - 16, idx + base_size)
 with open(OUT, "wb") as f:
     with open(BASE, "rb") as b:
         shutil.copyfileobj(b, f)
     f.write(data)
 print("linked:", OUT, os.path.getsize(OUT), "base", base_size, "entries", cnt)
+print("   compressed entries:", sum(1 for e in entries if e[1] == 1), "/", cnt)

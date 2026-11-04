@@ -15,8 +15,12 @@
 
 #define ID_PATH    101
 #define ID_BROWSE  102
-#define ID_R_RM    111
-#define ID_R_VA    112
+#define ID_VER     170
+#define ID_BAKMOV  171
+#define ID_V110    174
+#define ID_V117    175
+#define ID_V100    176
+#define ID_VRM     177
 #define ID_S_OVER  120
 #define ID_S_EMB   121
 #define ID_INSTALL 130
@@ -29,11 +33,23 @@
 #define ID_PROG    140
 #define ID_STATUS  141
 
-static HWND g_hPath, g_hStatus, g_hProg, g_hBtn, g_hMain, g_hRestoreState, g_hTip;
+static HWND g_hPath, g_hStatus, g_hProg, g_hBtn, g_hMain, g_hRestoreState, g_hVer;
 static WCHAR g_self[MAX_PATH];
 static HANDLE g_logFile = INVALID_HANDLE_VALUE;
 
-struct Entry { char name[260]; unsigned __int64 off; unsigned __int64 size; };
+struct Entry { char name[260]; unsigned __int64 off; unsigned __int64 size; unsigned __int64 orig; unsigned char method; };
+typedef long (__stdcall *tRtlDecompress)(unsigned short, unsigned char*, unsigned long, unsigned char*, unsigned long, unsigned long*);
+static tRtlDecompress g_pDecompress = 0;
+static unsigned char* g_dbuf = 0;
+static unsigned long g_dbufSize = 0;
+
+static tRtlDecompress get_decompress() {
+    if (!g_pDecompress) {
+        HMODULE n = LoadLibraryA("ntdll.dll");
+        if (n) g_pDecompress = (tRtlDecompress)GetProcAddress(n, "RtlDecompressBuffer");
+    }
+    return g_pDecompress;
+}
 static Entry* g_entries = 0;
 static unsigned int g_count = 0;
 static unsigned __int64 g_totalBytes = 0, g_doneBytes = 0;
@@ -127,11 +143,16 @@ static int load_index() {
         if (nl >= 260) { CloseHandle(h); return 0; }
         ReadFile(h, g_entries[i].name, nl, &got, NULL);
         g_entries[i].name[nl] = 0;
-        unsigned long long off = 0, size = 0;
+        unsigned char method = 0;
+        ReadFile(h, &method, 1, &got, NULL);
+        unsigned long long off = 0, size = 0, orig = 0;
         ReadFile(h, &off, 8, &got, NULL);
         ReadFile(h, &size, 8, &got, NULL);
+        ReadFile(h, &orig, 8, &got, NULL);
         g_entries[i].off = off;
         g_entries[i].size = size;
+        g_entries[i].orig = orig;
+        g_entries[i].method = method;
     }
     g_count = cnt;
     CloseHandle(h);
@@ -159,6 +180,10 @@ static void make_dirs_w(const WCHAR* full) {
 
 static int file_exists_w(const WCHAR* p);
 
+static int g_detected = 0;
+static int g_bakMovies = 1;
+static int g_moviesRestored = 0;   // 0=不备份/不还原影片
+
 // 备份到 <GameData>\_cn_backup\<相对路径>（首次备份为准；影片不备份，体积太大）
 static void backup_existing(const WCHAR* full, const char* rel, const WCHAR* destDir) {
     if (!file_exists_w(full)) return;
@@ -174,6 +199,69 @@ static void backup_existing(const WCHAR* full, const char* rel, const WCHAR* des
     CopyFileW(full, bak, FALSE);
 }
 
+static int write_payload(unsigned int i, HANDLE src, HANDLE dst) {
+    DWORD got = 0;
+    if (g_entries[i].method == 0) {
+        static unsigned char buf[1 << 20];
+        unsigned __int64 remain = g_entries[i].size;
+        DWORD wrote = 0;
+        while (remain > 0) {
+            DWORD want = remain > sizeof(buf) ? (DWORD)sizeof(buf) : (DWORD)remain;
+            if (!ReadFile(src, buf, want, &got, NULL) || got == 0) break;
+            if (!WriteFile(dst, buf, got, &wrote, NULL) || wrote != got) break;
+            remain -= got;
+        }
+        return remain == 0;
+    }
+    tRtlDecompress fn = get_decompress();
+    if (!fn) return 0;
+    if (g_entries[i].method == 1) {
+        unsigned long csz = (unsigned long)g_entries[i].size;
+        unsigned long osz = (unsigned long)g_entries[i].orig;
+        unsigned char* inb = (unsigned char*)mem_alloc(csz);
+        unsigned char* outb = (unsigned char*)mem_alloc(osz);
+        int ok = 0;
+        if (inb && outb) {
+            DWORD rd = 0;
+            if (ReadFile(src, inb, csz, &rd, NULL) && rd == csz) {
+                unsigned long outLen = 0;
+                if (fn(2, outb, osz, inb, csz, &outLen) == 0 && outLen == osz) {
+                    DWORD wr = 0;
+                    if (WriteFile(dst, outb, osz, &wr, NULL) && wr == osz) ok = 1;
+                }
+            }
+        }
+        if (inb) mem_free(inb);
+        if (outb) mem_free(outb);
+        return ok;
+    }
+    // method 2：分块
+    unsigned long nCh = 0;
+    if (!ReadFile(src, &nCh, 4, &got, NULL) || got != 4 || nCh == 0 || nCh > 8192) return 0;
+    for (unsigned long ci = 0; ci < nCh; ci++) {
+        unsigned long csz = 0, osz = 0;
+        if (!ReadFile(src, &csz, 4, &got, NULL) || got != 4) return 0;
+        if (!ReadFile(src, &osz, 4, &got, NULL) || got != 4) return 0;
+        unsigned char* inb = (unsigned char*)mem_alloc(csz);
+        unsigned char* outb = (unsigned char*)mem_alloc(osz);
+        int ok = 0;
+        if (inb && outb) {
+            DWORD rd = 0;
+            if (ReadFile(src, inb, csz, &rd, NULL) && rd == csz) {
+                unsigned long outLen = 0;
+                if (fn(2, outb, osz, inb, csz, &outLen) == 0 && outLen == osz) {
+                    DWORD wr = 0;
+                    if (WriteFile(dst, outb, osz, &wr, NULL) && wr == osz) ok = 1;
+                }
+            }
+        }
+        if (inb) mem_free(inb);
+        if (outb) mem_free(outb);
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
 static int extract_entry(unsigned int i, const WCHAR* destDir, int silent) {
     const char* name = g_entries[i].name;
     const char* rel = name + 2;
@@ -185,7 +273,7 @@ static int extract_entry(unsigned int i, const WCHAR* destDir, int silent) {
     str_catW(full, L"\\", 2048);
     str_catW(full, relW, 2048);
     make_dirs_w(full);
-    if (!has_prefix(name, "M/")) backup_existing(full, rel, destDir);
+    if (!has_prefix(name, "M/") || g_bakMovies) backup_existing(full, rel, destDir);
 
     HANDLE src = CreateFileW(g_self, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (src == INVALID_HANDLE_VALUE) return 0;
@@ -197,27 +285,19 @@ static int extract_entry(unsigned int i, const WCHAR* destDir, int silent) {
     }
     LARGE_INTEGER pos; pos.QuadPart = (LONGLONG)g_entries[i].off;
     SetFilePointerEx(src, pos, NULL, FILE_BEGIN);
-    static unsigned char buf[1 << 20];
-    unsigned __int64 remain = g_entries[i].size;
-    DWORD got = 0, wrote = 0;
-    while (remain > 0) {
-        DWORD want = remain > sizeof(buf) ? (DWORD)sizeof(buf) : (DWORD)remain;
-        if (!ReadFile(src, buf, want, &got, NULL) || got == 0) break;
-        if (!WriteFile(dst, buf, got, &wrote, NULL) || wrote != got) break;
-        remain -= got;
-        g_doneBytes += got;
-        if (!silent && g_totalBytes) {
-            unsigned int doneK = (unsigned int)(g_doneBytes >> 10);
-            unsigned int totalK = (unsigned int)(g_totalBytes >> 10);
-            int pct = totalK ? (int)((doneK * 100u) / totalK) : 0;
-            SendMessageW(g_hProg, PBM_SETPOS, (WPARAM)pct, 0);
-            MSG msg;
-            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
-        }
-    }
+    int okAll = write_payload(i, src, dst);
     CloseHandle(src);
     CloseHandle(dst);
-    if (remain) { log_lineW(L"ERR short read: ", full); return 0; }
+    if (!okAll) { log_lineW(L"ERR write: ", full); return 0; }
+    g_doneBytes += g_entries[i].orig;
+    if (!silent && g_totalBytes && g_hProg) {
+        unsigned int doneK = (unsigned int)(g_doneBytes >> 10);
+        unsigned int totalK = (unsigned int)(g_totalBytes >> 10);
+        int pct = totalK ? (int)((doneK * 100u) / totalK) : 0;
+        SendMessageW(g_hProg, PBM_SETPOS, (WPARAM)pct, 0);
+        MSG msg;
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    }
     return 1;
 }
 
@@ -326,7 +406,7 @@ static int run_install(const WCHAR* dir, int isRemaster, int embed, int silent) 
         join2(dir, L"cn_patch.txt", mk);
         HANDLE mh = CreateFileW(mk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (mh != INVALID_HANDLE_VALUE) {
-            const char* txt = isRemaster ? "v1.3.4 remaster" : "v1.3.4 vanilla";
+            const char* txt = isRemaster ? "v1.4.0 remaster" : "v1.4.0 vanilla";
             DWORD w = 0;
             WriteFile(mh, txt, (DWORD)lstrlenA(txt), &w, NULL);
             CloseHandle(mh);
@@ -348,7 +428,6 @@ static int run_restore(const WCHAR* dir) {
     int n = 0;
     for (unsigned int i = 0; i < g_count; i++) {
         const char* name = g_entries[i].name;
-        if (has_prefix(name, "M/")) continue;
         const char* rel = name + 2;
         WCHAR* bak = g_bakPath; WCHAR* dst = g_bakDst;
         str_copyW(bak, bakRoot, 2048);
@@ -436,7 +515,7 @@ static unsigned int check_localization(const WCHAR* dir, int remaster) {
 }
 
 static unsigned int need_mask(int remaster) {
-    return remaster ? (LS_CORE | LS_FONTS | LS_MOVIES) : (LS_CORE | LS_INGAME | LS_MOVIES);
+    return remaster ? (LS_CORE | LS_FONTS) : (LS_CORE | LS_INGAME);
 }
 
 static void detect_version(const WCHAR* dir) {
@@ -486,17 +565,26 @@ static int run_restore_original(const WCHAR* dir, int family) {
         SetFilePointerEx(src, pos, NULL, FILE_BEGIN);
         HANDLE dst = CreateFileW(full, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         if (dst == INVALID_HANDLE_VALUE) { CloseHandle(src); continue; }
-        static unsigned char buf[1 << 20];
-        unsigned __int64 remain = g_entries[i].size;
-        DWORD got = 0, wrote = 0;
-        while (remain > 0) {
-            DWORD want = remain > sizeof(buf) ? (DWORD)sizeof(buf) : (DWORD)remain;
-            if (!ReadFile(src, buf, want, &got, NULL) || got == 0) break;
-            if (!WriteFile(dst, buf, got, &wrote, NULL) || wrote != got) break;
-            remain -= got;
-        }
+        int okOne = write_payload(i, src, dst);
         CloseHandle(src); CloseHandle(dst);
-        if (remain == 0) n++;
+        if (okOne) n++;
+    }
+    // 从安装时备份恢复原版影片（如果有）
+    g_moviesRestored = 0;
+    if (g_bakMovies) {
+        static const WCHAR* mvs[] = { L"crawl.mvs", L"ingame.mvs" };
+        for (int mi = 0; mi < 2; mi++) {
+            static WCHAR bakM[2048], dstM[2048];
+            str_copyW(bakM, dir, 2048);
+            str_catW(bakM, L"\\_cn_backup\\data\\_lvl_pc\\movies\\", 2048);
+            str_catW(bakM, mvs[mi], 2048);
+            if (!file_exists_w(bakM)) continue;
+            str_copyW(dstM, dir, 2048);
+            str_catW(dstM, L"\\data\\_lvl_pc\\movies\\", 2048);
+            str_catW(dstM, mvs[mi], 2048);
+            make_dirs_w(dstM);
+            if (CopyFileW(bakM, dstM, FALSE)) g_moviesRestored++;
+        }
     }
     return n;
 }
@@ -550,19 +638,6 @@ static const WCHAR* os_name() {
 }
 static int os_is_xp() { return g_osMajor == 5; }
 
-static void add_tip(HWND hwnd, HWND ctl, const WCHAR* text) {
-    if (!g_hTip || !ctl) return;
-    TOOLINFOW ti;
-    ti.cbSize = sizeof(ti);
-    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-    ti.hwnd = hwnd;
-    ti.uId = (UINT_PTR)ctl;
-    ti.hinst = NULL;
-    ti.lpszText = (LPWSTR)text;
-    ti.lParam = 0;
-    SendMessageW(g_hTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-}
-
 static int del_tree(const WCHAR* path) {
     static WCHAR pat[2048];
     str_copyW(pat, path, 2048);
@@ -589,11 +664,40 @@ static int del_tree(const WCHAR* path) {
     return RemoveDirectoryW(path) ? 1 : 0;
 }
 
+static void update_restore_state(HWND hwnd, const WCHAR* dir);
+
+static void select_version(HWND hwnd, int id) {
+    int ids[4] = { ID_VRM, ID_V110, ID_V117, ID_V100 };
+    for (int i = 0; i < 4; i++) {
+        HWND b = GetDlgItem(hwnd, ids[i]);
+        if (b) SendMessageW(b, BM_SETCHECK, (WPARAM)(ids[i] == id ? BST_CHECKED : BST_UNCHECKED), 0);
+    }
+}
+
+static void update_buttons(HWND hwnd, const WCHAR* dir) {
+    if (g_hBtn) EnableWindow(g_hBtn, g_detected ? TRUE : FALSE);
+    HWND ro = GetDlgItem(hwnd, ID_RESTORE_ORIG);
+    if (ro) EnableWindow(ro, g_detected ? TRUE : FALSE);
+    update_restore_state(hwnd, dir);
+}
+
 static void update_restore_state(HWND hwnd, const WCHAR* dir) {
     if (!g_hRestoreState) return;
     static WCHAR bk[2048];
     join2(dir, L"_cn_backup", bk);
     BOOL ok = (GetFileAttributesW(bk) != INVALID_FILE_ATTRIBUTES);
+    if (!ok) {
+        // 没有备份目录但确实装过补丁（旧版本安装），也允许点击（点击后会提示无备份）
+        static WCHAR f1[2048];
+        join2(dir, L"cn_patch.txt", f1);
+        if (!file_exists_w(f1)) {
+            join2(dir, L"cn_hook.dll", f1);
+            if (!file_exists_w(f1)) {
+                join2(dir, L"cn_hook_xp.dll", f1);
+                if (file_exists_w(f1)) ok = TRUE;
+            } else ok = TRUE;
+        } else ok = TRUE;
+    }
     EnableWindow(g_hRestoreState, ok);
 }
 
@@ -606,9 +710,23 @@ static void do_install_gui(HWND hwnd) {
         MessageBoxW(hwnd, L"这个目录看起来不是正确的 GameData 文件夹（找不到 data\\_lvl_pc\\core.lvl）。\r\n\r\n请选择 ...\\Star Wars - Battlefront 2\\GameData", L"路径不对", MB_ICONWARNING);
         return;
     }
-    int rm_mode = (SendMessageW(GetDlgItem(hwnd, ID_R_RM), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    g_bakMovies = (SendMessageW(GetDlgItem(hwnd, ID_BAKMOV), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    int isRemaster = (SendMessageW(GetDlgItem(hwnd, ID_VRM), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
     int embed = 1;
-    int isRemaster = rm_mode;
+    if (isRemaster && !g_remaster) {
+        if (MessageBoxW(hwnd,
+                L"当前目录未检测到 Remaster 1.5r2 补丁。\r\n\r\n仍要按 Remaster 版安装吗？\r\n（一般应选择「原版 1.1」对应项）",
+                L"未检测到 Remaster", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    }
+    if (isRemaster) {
+        g_family = (g_remaster ? g_family : 0);
+    } else if (SendMessageW(GetDlgItem(hwnd, ID_V100), BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        g_family = 2;   // CD 1.0
+    } else if (SendMessageW(GetDlgItem(hwnd, ID_V117), BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        g_family = 1;   // GOG 2017 / 零售 1.1
+    } else {
+        g_family = 0;   // Steam / GOG 2018
+    }
 
     SetWindowTextW(g_hStatus, L"正在安装，请稍候…");
     SendMessageW(g_hProg, PBM_SETPOS, 0, 0);
@@ -616,6 +734,8 @@ static void do_install_gui(HWND hwnd) {
     if (r >= 0) {
         SendMessageW(g_hProg, PBM_SETPOS, 100, 0);
         SetWindowTextW(g_hStatus, L"安装完成");
+        update_buttons(hwnd, dir);
+        PostMessageW(hwnd, WM_COMMAND, (WPARAM)ID_DETECT, 0);   // 装完自动刷新检测结果
         MessageBoxW(hwnd, L"安装完成！\r\n\r\n本版不含启动器，直接运行游戏目录下的 BattlefrontII.exe 即可。\r\n如需还原，请用安装器的「还原原版」或 Steam/GOG 的「验证文件」。", L"成功", MB_ICONINFORMATION);
     } else {
         SetWindowTextW(g_hStatus, L"安装失败，详见 install_cn.log");
@@ -638,37 +758,38 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                       18, 88, 600, 74, hwnd, (HMENU)ID_RESULT, h, NULL);
 
         CreateWindowW(L"STATIC", L"安装版本：", WS_CHILD | WS_VISIBLE, 18, 172, 200, 18, hwnd, NULL, h, NULL);
-        CreateWindowW(L"BUTTON", L"Remaster 1.5r2 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP, 18, 192, 220, 20, hwnd, (HMENU)ID_R_RM, h, NULL);
-        CreateWindowW(L"BUTTON", L"原版 1.1 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, 18, 214, 220, 20, hwnd, (HMENU)ID_R_VA, h, NULL);
-        CreateWindowW(L"STATIC", L"过场与开场字幕已烧录进影片，无需设置", WS_CHILD | WS_VISIBLE, 250, 192, 370, 40, hwnd, NULL, h, NULL);
+        CreateWindowW(L"BUTTON", L"Remaster 1.5r2 版", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
+                      18, 192, 200, 20, hwnd, (HMENU)ID_VRM, h, NULL);
+        CreateWindowW(L"BUTTON", L"原版 1.1（Steam / GOG 2018）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                      18, 216, 205, 20, hwnd, (HMENU)ID_V110, h, NULL);
+        CreateWindowW(L"BUTTON", L"原版 1.1（GOG 2017 / 零售）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                      228, 216, 195, 20, hwnd, (HMENU)ID_V117, h, NULL);
+        CreateWindowW(L"BUTTON", L"原版 1.0（2005 初版 CD）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                      428, 216, 210, 20, hwnd, (HMENU)ID_V100, h, NULL);
+        select_version(hwnd, ID_V110);
 
-        CreateWindowW(L"STATIC", L"本版不含启动器：直接运行游戏目录下的 BattlefrontII.exe 即可", WS_CHILD | WS_VISIBLE, 18, 254, 600, 20, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"开始安装：写入中文文本、字体与中文字幕影片；已存在的文件会先备份到 _cn_backup", WS_CHILD | WS_VISIBLE, 18, 248, 620, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"还原原版：用内置官方文件覆盖，警告：Remaster 补丁会一并清除", WS_CHILD | WS_VISIBLE, 18, 268, 620, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"恢复先前游戏状态：还原安装本补丁之前的文件（没有备份时不可点）", WS_CHILD | WS_VISIBLE, 18, 292, 620, 18, hwnd, NULL, h, NULL);
+        CreateWindowW(L"STATIC", L"安装完成后直接运行游戏目录下的 BattlefrontII.exe", WS_CHILD | WS_VISIBLE, 18, 316, 620, 18, hwnd, NULL, h, NULL);
 
-        g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 286, 110, 30, hwnd, (HMENU)ID_INSTALL, h, NULL);
-        CreateWindowW(L"BUTTON", L"还原原版", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 138, 286, 110, 30, hwnd, (HMENU)ID_RESTORE_ORIG, h, NULL);
-        g_hRestoreState = CreateWindowW(L"BUTTON", L"恢复先前游戏状态", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 286, 140, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
+        CreateWindowW(L"BUTTON", L"备份原版影片用于还原（约 +600~900 MB 磁盘）",
+                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 18, 336, 520, 20, hwnd, (HMENU)ID_BAKMOV, h, NULL);
+        CheckDlgButton(hwnd, ID_BAKMOV, BST_CHECKED);
 
-        g_hTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, h, NULL);
-        if (g_hTip) {
-            SendMessageW(g_hTip, TTM_SETMAXTIPWIDTH, 0, 420);
-            SendMessageW(g_hTip, TTM_ACTIVATE, TRUE, 0);
-            add_tip(hwnd, GetDlgItem(hwnd, ID_BROWSE), L"选择游戏的 GameData 目录");
-            add_tip(hwnd, GetDlgItem(hwnd, ID_DETECT), L"检测操作系统、游戏平台（GOG/Steam/CD）、Remaster 补丁与当前汉化完整度");
-            add_tip(hwnd, GetDlgItem(hwnd, ID_INSTALL), L"把中文文本、字体与中文字幕影片写入游戏目录\n已存在的文件会先备份到 GameData\\_cn_backup");
-            add_tip(hwnd, GetDlgItem(hwnd, ID_RESTORE_ORIG), L"用安装包内置的官方原始文件（core / ingame / shell）覆盖回去\n适用于彻底移除汉化、回到英文原版");
-            add_tip(hwnd, GetDlgItem(hwnd, ID_RESTORE), L"把游戏恢复成安装本补丁之前的状态\n使用安装时自动备份的文件，仅当存在备份时可用");
-        }
-        g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 408, 292, 230, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
-        g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 324, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
-        CreateWindowW(L"STATIC", L"v1.3.4  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 348, 600, 18, hwnd, NULL, h, NULL);
+        g_hBtn = CreateWindowW(L"BUTTON", L"开始安装", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 18, 366, 110, 30, hwnd, (HMENU)ID_INSTALL, h, NULL);
+        CreateWindowW(L"BUTTON", L"还原原版", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 138, 366, 110, 30, hwnd, (HMENU)ID_RESTORE_ORIG, h, NULL);
+        g_hRestoreState = CreateWindowW(L"BUTTON", L"恢复先前游戏状态", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 366, 140, 30, hwnd, (HMENU)ID_RESTORE, h, NULL);
+
+        g_hStatus = CreateWindowW(L"STATIC", L"请选择游戏目录后点击「检测版本」", WS_CHILD | WS_VISIBLE, 408, 372, 230, 20, hwnd, (HMENU)ID_STATUS, h, NULL);
+        g_hProg = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, 18, 404, 600, 16, hwnd, (HMENU)ID_PROG, h, NULL);
+        CreateWindowW(L"STATIC", L"v1.4.0  ·  界面/字体/过场字幕/开场动画  ·  Windows XP SP3+", WS_CHILD | WS_VISIBLE, 18, 428, 600, 18, hwnd, NULL, h, NULL);
 
         {
             HWND ch = GetWindow(hwnd, GW_CHILD);
             while (ch) { SendMessageW(ch, WM_SETFONT, (WPARAM)font, TRUE); ch = GetWindow(ch, GW_HWNDNEXT); }
         }
-        CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, ID_R_VA);
-        { static WCHAR g0[2048]; GetWindowTextW(g_hPath, g0, 2048); update_restore_state(hwnd, g0); }
+        { static WCHAR g0[2048]; GetWindowTextW(g_hPath, g0, 2048); g_detected = 0; update_buttons(hwnd, g0); }
         os_name();
         {
             const WCHAR* guesses[] = {
@@ -683,6 +804,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_COMMAND:
+        if (LOWORD(wp) == ID_PATH && HIWORD(wp) == EN_CHANGE) {
+            static WCHAR gc[2048];
+            GetWindowTextW(g_hPath, gc, 2048);
+            g_detected = 0;
+            update_buttons(hwnd, gc);
+            return 0;
+        }
         if (LOWORD(wp) == ID_BROWSE) {
             BROWSEINFOW bi;
             bi.hwndOwner = hwnd; bi.pidlRoot = NULL; bi.pszDisplayName = NULL;
@@ -694,7 +822,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 p[0] = 0;
                 SHGetPathFromIDListW(pidl, p);
                 CoTaskMemFree(pidl);
-                if (p[0]) SetWindowTextW(g_hPath, p);
+                if (p[0]) { SetWindowTextW(g_hPath, p); g_detected = 0; update_buttons(hwnd, p); }
             }
         } else if (LOWORD(wp) == ID_DETECT) {
             static WCHAR dir[2048];
@@ -704,7 +832,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             out[0] = 0;
             if (!join_and_check(dir, L"data\\_lvl_pc\\core.lvl")) {
                 wsprintfW(out, L"路径无效：找不到 data\\_lvl_pc\\core.lvl\r\n请选择 ...\\Star Wars - Battlefront 2\\GameData");
+                g_detected = 0;
             } else {
+                g_detected = 1;
                 detect_version(dir);
                 static WCHAR exePath[2048];
                 join2(dir, L"BattlefrontII.exe", exePath);
@@ -729,7 +859,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 unsigned int have = check_localization(dir, g_remaster);
                 unsigned int need = need_mask(g_remaster);
                 WCHAR cnState[192];
-                if (have == 0) {
+                int hasDll = 0;
+                {
+                    static WCHAR dk[2048];
+                    join2(dir, L"cn_hook.dll", dk);
+                    if (file_exists_w(dk)) hasDll = 1;
+                    else { join2(dir, L"cn_hook_xp.dll", dk); if (file_exists_w(dk)) hasDll = 1; }
+                }
+                int installed = (ver[0] != 0) || hasDll || ((have & LS_CORE) != 0);
+                if (!installed) {
                     lstrcpyW(cnState, L"未安装汉化包");
                 } else if (g_remaster && !(have & LS_CORE)) {
                     lstrcpyW(cnState, L"Remaster 汉化未安装，请点击「开始安装」以补全汉化");
@@ -750,7 +888,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                           g_remaster ? L"Remaster 版" : L"原版 1.1 版");
             }
             SetWindowTextW(GetDlgItem(hwnd, ID_RESULT), out);
-            CheckRadioButton(hwnd, ID_R_RM, ID_R_VA, g_remaster ? ID_R_RM : ID_R_VA);
+            update_restore_state(hwnd, dir);
+            if (g_detected) {
+                int pick = ID_V110;
+                if (g_remaster) pick = ID_VRM;
+                else if (g_family == 2) pick = ID_V100;
+                else if (g_family == 1) pick = ID_V117;
+                else if (g_platform == 3) pick = ID_V110;
+                select_version(hwnd, pick);
+            }
+            update_buttons(hwnd, dir);
             SetWindowTextW(g_hStatus, g_remaster ? L"已选：Remaster 版" : L"已选：原版 1.1 版");
         } else if (LOWORD(wp) == ID_RESTORE_ORIG) {
             static WCHAR dir[2048];
@@ -764,29 +911,31 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             static WCHAR rmDir[2048];
             join2(dir, L"addon\\Remaster", rmDir);
             int hasRm = (GetFileAttributesW(rmDir) != INVALID_FILE_ATTRIBUTES);
-            if (MessageBoxW(hwnd,
-                    L"将用内置的官方原始文件覆盖 core / ingame / shell，并删除汉化启动器与安装标记。\r\n\r\n"
-                    L"确定还原为英文原版吗？",
-                    L"还原原版游戏", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
+            const WCHAR* packName = L"GOG 2018 / Steam";
+            if (g_family == 2) packName = L"CD 1.0（2005 原始盘）";
+            else if (g_family == 1) packName = L"GOG 经典版（2017 前）";
+            static WCHAR qmsg[768];
+            wsprintfW(qmsg,
+                L"将使用内置的【%s】官方原始文件覆盖：\n"
+                L"  data\\_lvl_pc\\core.lvl\n"
+                L"  data\\_lvl_pc\\ingame.lvl\n"
+                L"  data\\_lvl_pc\\shell.lvl\n\n"
+                L"警告：若检测到 Remaster 补丁（addon\\Remaster），将一并清除。\n\n"
+                L"确定还原为英文原版吗？", packName);
+            if (MessageBoxW(hwnd, qmsg, L"还原原版游戏", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
             int n = run_restore_original(dir, g_family);
             int removedRm = 0;
-            if (hasRm) {
-                if (MessageBoxW(hwnd,
-                        L"检测到 Remaster 补丁（addon\\Remaster）。\r\n\r\n"
-                        L"是否一并移除 Remaster 模组，回到纯净原版游戏？\r\n"
-                        L"（选「否」则保留 Remaster）",
-                        L"移除 Remaster 补丁", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                    removedRm = del_tree(rmDir);
-                }
-            }
+            if (hasRm) removedRm = del_tree(rmDir);
             static WCHAR extra[2048];
             join2(dir, L"cn_hook.dll", extra); DeleteFileW(extra);
             join2(dir, L"SWBF2_CN.exe", extra); DeleteFileW(extra);
             join2(dir, L"SWBF2_CN_XP.exe", extra); DeleteFileW(extra);
             join2(dir, L"cn_patch.txt", extra); DeleteFileW(extra);
             static WCHAR msg[512];
-            wsprintfW(msg, L"已还原 %d 个原版文件（core/ingame/shell）。%s\r\n\r\n影片请用 Steam/GOG 的「验证文件」恢复。",
-                      n, removedRm ? L"\r\nRemaster 补丁已移除。" : (hasRm ? L"\r\nRemaster 补丁已保留。" : L""));
+            wsprintfW(msg, L"已用【%s】原版文件还原 %d 个文件。%s%s\r\n\r\n影片请用 Steam/GOG 的「验证文件」恢复。",
+                      packName, n,
+                      removedRm ? L"\r\nRemaster 补丁已清除。" : L"",
+                      g_moviesRestored > 0 ? L"\r\n已从安装时备份恢复原版影片。" : L"");
             MessageBoxW(hwnd, msg, L"还原原版完成", MB_ICONINFORMATION);
         } else if (LOWORD(wp) == ID_INSTALL) {
             EnableWindow(g_hBtn, FALSE);
@@ -839,6 +988,7 @@ void __stdcall EntryPoint() {
             else if (str_ncmpW(argv[i], L"--launcher=", 11) == 0) g_xpMode = (str_cmpiW(argv[i] + 11, L"xp") == 0) ? 1 : 0;
         }
         if ((silent & 0x400) && sdir) {
+            if (!load_index()) ExitProcess(2);
             detect_version(sdir);
             int n = run_restore_original(sdir, g_family);
             static WCHAR rm[2048];
@@ -901,7 +1051,7 @@ void __stdcall EntryPoint() {
 
     INITCOMMONCONTROLSEX icc;
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES;
+    icc.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
     if (!load_index()) {
         MessageBoxW(NULL, L"安装器数据损坏（找不到内嵌文件）。\r\n请重新下载完整的安装程序。", L"错误", MB_ICONERROR);
@@ -921,9 +1071,9 @@ void __stdcall EntryPoint() {
     wc.lpszClassName = L"SWBF2CNInstallerXP";
     wc.hIconSm = NULL;
     RegisterClassExW(&wc);
-    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线 II 简体中文补丁 安装器 v1.3.4",
+    g_hMain = CreateWindowExW(0, L"SWBF2CNInstallerXP", L"星球大战：前线2 简体中文包 安装器",
                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 650, 412, NULL, NULL, wc.hInstance, NULL);
+                              CW_USEDEFAULT, CW_USEDEFAULT, 700, 492, NULL, NULL, wc.hInstance, NULL);
     if (!g_hMain) ExitProcess(1);
     ShowWindow(g_hMain, SW_SHOW);
     UpdateWindow(g_hMain);
